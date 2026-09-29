@@ -1,0 +1,22 @@
+# Idle-Sword 项目文档
+
+本目录是项目设计与技术文档的统一入口。Godot 工程位于 `../idle-sword/`。
+
+## 文档索引
+
+- [已确认规则与待确认边界](design/core_rules.md)
+- [工程框架方案](technical/architecture.md)
+- [配置表规划](data/config_plan.md)
+- [CSV 字段字典](data/fields.md)
+- [第一阶段实现与暂定规则](planning/phase_01.md)
+- [美术资源规范](art/asset_spec.md)
+- [参考资料](reference/zad_archery.md)
+- [启动与验证](../README.md)
+
+## 维护约定
+
+- 文档使用 UTF-8 Markdown；代码、配置、美术与文档分别存放。
+- 区分“已确认规则”“实现建议”“待确认”，不得把建议写成既定需求。
+- 设计变更同步更新相关文档，过时规则直接修订，保留必要的变更说明。
+- 字段名称、单位、引用关系和公式统一维护在 `data/`；不要只写在聊天记录或代码中。
+- 当前阶段已完成可运行框架原型；区分已实现功能与正式内容设计，详见阶段交付说明。

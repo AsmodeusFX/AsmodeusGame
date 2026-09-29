@@ -1,0 +1,12 @@
+{
+  "player": "res://Assets/Sprites/player.svg",
+  "slime": "res://Assets/Sprites/slime.svg",
+  "archer": "res://Assets/Sprites/archer.svg",
+  "mage": "res://Assets/Sprites/mage.svg",
+  "elite": "res://Assets/Sprites/elite.svg",
+  "boss": "res://Assets/Sprites/boss.svg",
+  "rift": "res://Assets/Sprites/rift.svg",
+  "pet_azure": "res://Assets/Sprites/pet_azure.svg",
+  "pet_crimson": "res://Assets/Sprites/pet_crimson.svg",
+  "pet_snow": "res://Assets/Sprites/pet_snow.svg"
+}

@@ -1,0 +1,7 @@
+id,name,kind,hp,atk,attack_range,attack_interval,move_speed,attack_type,gold,visual
+slime,青苔妖,normal,45,6,95,1.8,155,melee,7,slime
+archer,山魈弓手,normal,38,5,480,2.6,115,ranged,9,archer
+mage,幽火妖,normal,50,8,620,3.2,100,magic,11,mage
+elite,赤甲妖,elite,160,13,140,2,135,melee,30,elite
+boss,镇山妖王,boss,1300,20,420,2.2,80,magic,100,boss
+rift,时空裂隙,rift,240,0,0,1,0,none,0,rift

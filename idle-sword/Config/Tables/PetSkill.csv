@@ -1,0 +1,4 @@
+id,name,cooldown,power,range,kind
+pet_shot,灵羽,1.8,0.55,1100,projectile
+pet_blast,赤焰,3,1.2,1000,target
+pet_frost,寒芒,2.3,0.8,1150,projectile

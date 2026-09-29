@@ -1,0 +1,4 @@
+id,name,category,power,cost_gold
+pet_edge,锐锋,attack,0.15,100
+pet_echo,回响,echo,0.12,100
+pet_focus,凝神,focus,0.1,100

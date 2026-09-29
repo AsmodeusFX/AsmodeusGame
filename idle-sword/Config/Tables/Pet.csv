@@ -1,0 +1,4 @@
+id,name,skill_id,weight,visual
+pet_azure,青羽,pet_shot,50,pet_azure
+pet_crimson,赤霄,pet_blast,30,pet_crimson
+pet_snow,雪魄,pet_frost,20,pet_snow

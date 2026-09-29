@@ -1,0 +1,4 @@
+id,monster_id,count,interval,elite_every,elite_id
+wave_1,slime,3,6,5,elite
+wave_2,archer,3,6.5,5,elite
+wave_3,mage,2,6,5,elite

@@ -1,0 +1,16 @@
+id,name,realm_id,kind,cooldown,range,power,duration,max_level,cost,cost_growth
+skill_01,御气飞剑,realm_0,projectile,1.25,950,1,2,50,30,1.22
+skill_02,落星诀,realm_0,target,3.8,950,2.8,0.6,50,40,1.22
+skill_03,青莲剑阵,realm_0,ground,7,950,0.65,4,50,52,1.22
+skill_04,护心剑罡,realm_1,buff,10,950,1.35,5,50,69,1.22
+skill_05,唤剑影,realm_1,summon,12,950,0.75,7,50,91,1.22
+skill_06,疾风剑,realm_1,projectile,1.25,950,1,2,50,120,1.22
+skill_07,天雷引,realm_2,target,3.8,950,2.8,0.6,50,159,1.22
+skill_08,霜华剑域,realm_2,ground,7,950,0.65,4,50,209,1.22
+skill_09,归元护法,realm_2,buff,10,950,1.35,5,50,277,1.22
+skill_10,太虚剑侍,realm_3,summon,12,950,0.75,7,50,365,1.22
+skill_11,流火剑,realm_3,projectile,1.25,950,1,2,50,482,1.22
+skill_12,破云诀,realm_3,target,3.8,950,2.8,0.6,50,636,1.22
+skill_13,焚天剑阵,realm_4,ground,7,950,0.65,4,50,839,1.22
+skill_14,万剑归心,realm_4,buff,10,950,1.35,5,50,1108,1.22
+skill_15,诛邪剑灵,realm_4,summon,12,950,0.75,7,50,1463,1.22

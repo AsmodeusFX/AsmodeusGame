@@ -1,0 +1,143 @@
+using Godot;
+using IdleSword.Core;
+
+namespace IdleSword.UI;
+
+public partial class Main
+{
+    private void TalentPage()
+    {
+        UiKit.Label(_page, "剑途 · 一念启程", 20, 0, 480, 45, 29, UiKit.Gold);
+        UiKit.Label(_page, "沿已点亮的连线探索。灵钱修行，妖核破境。", 20, 44, 720, 32, 19, UiKit.Muted);
+        var visible = _game.Config.Rows("Talent").Where(r => _game.TalentVisible(r.Text("id"))).ToList();
+        var scroll = new ScrollContainer { VerticalScrollMode = ScrollContainer.ScrollMode.Disabled };
+        UiKit.Place(scroll, 0, 80, 1872, 220); _page.AddChild(scroll);
+        var graph = new Control { CustomMinimumSize = new(Math.Max(1830, visible.Max(r => r.Int("column")) * 395), 210) }; scroll.AddChild(graph);
+        Vector2 Point(CsvRow r) => new(195 + (r.Int("column") - 1) * 395, 22 + (r.Int("row") - 1) * 42);
+        foreach (var link in _game.Config.Rows("TalentLink"))
+        {
+            var from = visible.FirstOrDefault(r => r.Text("id") == link.Text("from_id"));
+            var to = visible.FirstOrDefault(r => r.Text("id") == link.Text("to_id"));
+            if (from is null || to is null) continue;
+            var line = new Line2D { Points = [Point(from), Point(to)], DefaultColor = UiKit.Line, Width = 3 }; graph.AddChild(line);
+        }
+        foreach (var r in visible)
+        {
+            string id = r.Text("id"); int rank = _game.State.Talents.GetValueOrDefault(id); var p = Point(r);
+            var button = UiKit.Button(graph, $"{r.Text("name")} {rank}/{r.Int("max_level")} · {r.Number("cost_gold") * (rank + 1):0}钱" + (r.Number("cost_core") > 0 ? $" +{r.Number("cost_core"):0}核" : ""), p.X - 172, p.Y - 18, 344, 36, () => Act(() => _game.BuyTalent(id)), rank > 0);
+            button.AddThemeFontSizeOverride("font_size", 18);
+            foreach (var style in new[] { "normal", "hover", "pressed", "focus" })
+            {
+                var box = (StyleBoxFlat)button.GetThemeStylebox(style).Duplicate(); box.ContentMarginTop = 1; box.ContentMarginBottom = 1; button.AddThemeStyleboxOverride(style, box);
+            }
+            string description = r.Text("effect") switch { "atk" => $"攻击加成 +{r.Number("value"):P0}", "hp" => $"气血加成 +{r.Number("value"):P0}", _ => "解锁在线自动参悟" };
+            button.TooltipText = $"点击精进。{description}；当前 {rank}/{r.Int("max_level")}。";
+        }
+        UiKit.Label(_page, "沿连线点击节点精进   ·   静心自悟解锁自动参悟   ·   横向可滚动", 22, 296, 1500, 24, 16, UiKit.Muted);
+    }
+    private void SkillPage()
+    {
+        int i = 0;
+        foreach (var realm in _game.Config.Rows("SwordLevel").OrderBy(r => r.Int("order")))
+        {
+            float x = i++ * 376; string rid = realm.Text("id"); bool unlocked = _game.State.Realms.Contains(rid);
+            UiKit.PanelAt(_page, x, 0, 358, 316);
+            UiKit.Label(_page, realm.Text("name"), x + 18, 8, 130, 40, 29, UiKit.Gold);
+            if (!unlocked) UiKit.Button(_page, $"突破 {UiKit.Number(realm.Number("cost_gold"))}", x + 154, 12, 184, 38, () => Act(() => _game.UnlockRealm(rid)));
+            else UiKit.Label(_page, "境界已开启", x + 180, 13, 150, 35, 18, UiKit.Jade);
+            int j = 0;
+            foreach (var skill in _game.Config.Skills.Values.Where(s => s.Realm == rid))
+            {
+                float y = 64 + j++ * 78; string sid = skill.Id;
+                var label = UiKit.Label(_page, "", x + 18, y, 320, 27, 20);
+                _bindings.Add(() => label.Text = $"{skill.Name}  Lv.{_game.State.Skills.GetValueOrDefault(sid)}   CD {_game.Battle.Cooldowns.GetValueOrDefault(sid):0.0}s");
+                var button = UiKit.Button(_page, "", x + 18, y + 31, 320, 36, () => Act(() => _game.UpgradeSkill(sid)));
+                _bindings.Add(() => button.Text = $"{(_game.State.Skills.GetValueOrDefault(sid) > 0 ? "强化" : "习得")} · {UiKit.Number(_game.SkillCost(sid))} 灵钱");
+                button.Disabled = !unlocked;
+            }
+        }
+    }
+    private void ForgePage()
+    {
+        UiKit.PanelAt(_page, 0, 0, 510, 316);
+        UiKit.Label(_page, "本命之剑", 24, 15, 420, 45, 29, UiKit.Gold);
+        string name = _game.State.Weapon == "" ? "尚未佩剑" : _game.Config.Row("Equip", _game.State.Weapon).Text("name") + "  +" + _game.State.WeaponLevel;
+        UiKit.Label(_page, name, 24, 74, 450, 52, 33);
+        UiKit.Label(_page, $"武器攻击 +{UiKit.Number(_game.WeaponAttack)}   品质 {_game.State.WeaponRoll:P0}", 24, 135, 450, 40, 22, UiKit.Jade);
+        if (_game.State.Weapon != "")
+        {
+            var w = _game.Config.Row("Equip", _game.State.Weapon);
+            UiKit.Button(_page, $"淬炼 {w.Number("upgrade_cost") * (_game.State.WeaponLevel + 1):0}", 24, 199, 218, 48, () => Act(_game.Strengthen));
+            UiKit.Button(_page, $"洗练 {w.Number("refine_cost"):0}", 260, 199, 218, 48, () => Act(_game.Refine));
+        }
+        UiKit.Label(_page, "单装备位 · 洗练品质 90%～130%", 24, 268, 455, 32, 18, UiKit.Muted);
+        int i = 0;
+        foreach (var r in _game.Config.Rows("Equip"))
+        {
+            float x = 534 + i++ * 450; string id = r.Text("id");
+            UiKit.PanelAt(_page, x, 0, 430, 316);
+            UiKit.Label(_page, r.Text("name"), x + 24, 30, 380, 52, 32, UiKit.Gold);
+            UiKit.Label(_page, $"基础攻击 +{r.Number("base_atk"):0}", x + 24, 99, 370, 45, 25, UiKit.Jade);
+            UiKit.Label(_page, "打造后替换当前武器\n强化等级与洗练品质重新开始", x + 24, 150, 380, 65, 18, UiKit.Muted);
+            UiKit.Button(_page, $"打造并装备 · {r.Number("craft_cost"):0} 灵钱", x + 24, 240, 382, 52, () => Act(() => _game.Craft(id)), true);
+        }
+    }
+    private void IntentPage()
+    {
+        string[] names = ["参悟灵石", "风之剑意", "雷之剑意", "霜之剑意", "炎之剑意"];
+        for (int i = 0; i < names.Length; i++) { int tab = i - 1; UiKit.Button(_page, names[i], i * 235, 0, 220, 40, () => { _intentTab = tab; ShowPage(3); Refresh(); }, _intentTab == tab); }
+        var currencies = UiKit.Label(_page, "", 1190, 0, 665, 40, 19, UiKit.Jade);
+        _bindings.Add(() => currencies.Text = string.Join("   ", Enumerable.Range(0, 4).Select(i => $"{new[] { "风", "雷", "霜", "炎" }[i]} {UiKit.Number(_game.State.Amount("intent_" + i))}")));
+        if (_intentTab == -1)
+        {
+            int i = 0;
+            foreach (var r in _game.Config.Rows("contemplation"))
+            {
+                float x = i++ * 469; string id = r.Text("id"), item = r.Text("item_id");
+                UiKit.PanelAt(_page, x, 56, 451, 217);
+                UiKit.Label(_page, r.Text("name"), x + 22, 67, 400, 42, 26, UiKit.Gold);
+                UiKit.Button(_page, "◇  点击参悟", x + 22, 121, 185, 65, () => { _game.ClickOre(id); Refresh(); }, true);
+                var pile = UiKit.Button(_page, "", x + 225, 121, 203, 65, () => _game.CollectIntent(item));
+                pile.MouseEntered += () => { _game.CollectIntent(item); Refresh(); };
+                _bindings.Add(() => pile.Text = $"移入收取 ×{_game.State.PendingIntent.GetValueOrDefault(item):0}");
+                var status = UiKit.Label(_page, "", x + 22, 206, 405, 42, 18, UiKit.Muted);
+                _bindings.Add(() => status.Text = $"积存上限 {r.Number("capacity"):0}  /  " + (_game.TalentBonus("auto_intent") > 0 ? $"每 {r.Number("auto_interval"):0} 秒自悟" : "剑途可解锁自动参悟"));
+            }
+            UiKit.Label(_page, "参悟时战斗继续；离开页面仍在线自悟，产物积存至上限。", 10, 282, 1780, 30, 18, UiKit.Muted);
+        }
+        else
+        {
+            int i = 0;
+            foreach (var r in _game.Config.Rows("SwordUpgrade").Where(r => r.Int("tier") == _intentTab))
+            {
+                int index = i++; float x = index % 5 * 376, y = 58 + index / 5 * 86; string id = r.Text("id");
+                var b = UiKit.Button(_page, "", x, y, 356, 75, () => Act(() => _game.UpgradeIntent(id)));
+                _bindings.Add(() => { int rank = _game.State.Upgrades.GetValueOrDefault(id); b.Text = $"{r.Text("name")}  {rank}/{r.Int("max_level")}\n效果 +{r.Number("value"):P0} · 消耗 {r.Number("cost") * (rank + 1):0}"; });
+            }
+        }
+    }
+    private void PetPage()
+    {
+        UiKit.PanelAt(_page, 0, 0, 430, 316);
+        UiKit.Label(_page, "灵契 · 剑灵应召", 22, 22, 390, 44, 29, UiKit.Gold);
+        UiKit.Label(_page, $"出战 {_game.State.EquippedPets.Count}/3\n每个剑灵可装 3 类增强", 22, 83, 380, 75, 24, UiKit.Jade);
+        UiKit.Button(_page, $"召唤 · {_game.Config.Setting("pet_draw_cost"):0} 灵钱", 22, 182, 384, 54, () => Act(_game.DrawPet), true);
+        double totalWeight = _game.Config.Rows("Pet").Sum(r => r.Number("weight"));
+        string odds = string.Join(" · ", _game.Config.Rows("Pet").Select(r => $"{r.Text("name")}{r.Number("weight") / totalWeight:P0}"));
+        UiKit.Label(_page, odds + $"\n重复返还{_game.Config.Setting("pet_duplicate_gold"):0}灵钱；样例无保底", 22, 250, 390, 53, 18, UiKit.Muted);
+        int i = 0;
+        foreach (var r in _game.Config.Rows("Pet"))
+        {
+            float x = 454 + i++ * 475; string id = r.Text("id"); bool owned = _game.State.Pets.Contains(id);
+            UiKit.PanelAt(_page, x, 0, 452, 316);
+            UiKit.Label(_page, r.Text("name") + (owned ? "" : " · 未应召"), x + 22, 15, 400, 47, 29, UiKit.Gold);
+            var equip = UiKit.Button(_page, _game.State.EquippedPets.Contains(id) ? "已出战 · 点击休息" : "出战", x + 22, 72, 406, 43, () => Act(() => _game.TogglePet(id))); equip.Disabled = !owned;
+            int j = 0;
+            foreach (var buff in _game.Config.Rows("PetEquip"))
+            {
+                string bid = buff.Text("id"); bool has = _game.State.PetBuffs.GetValueOrDefault(id, []).Contains(bid);
+                var b = UiKit.Button(_page, $"{buff.Text("name")}  +{buff.Number("power"):P0}  " + (has ? "已装备" : $"{buff.Number("cost_gold"):0} 灵钱"), x + 22, 133 + j++ * 54, 406, 44, () => Act(() => _game.EquipPetBuff(id, bid))); b.Disabled = !owned || has;
+            }
+        }
+    }
+}

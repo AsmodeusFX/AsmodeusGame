@@ -1,0 +1,10 @@
+id,name,base_value,format
+hp,气血,240,integer
+atk,攻击,25,integer
+move_speed,移速,340,integer
+stop_range,停步距离,640,integer
+atk_percent,攻击加成,0,percent
+hp_percent,气血加成,0,percent
+crit,暴击率,0.05,percent
+crit_damage,暴击倍率,1.5,decimal
+dodge,闪避,0.02,percent

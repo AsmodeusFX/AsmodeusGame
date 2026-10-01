@@ -4,7 +4,7 @@
 
 ## 工程位置
 
-沿用 `idle-sword/project.godot`，不另建平行工程。已实测 Godot 4.7.2 .NET + .NET 10；当前选择 Compatibility 渲染器，程序集为 Idle-Sword。
+沿用 `idle-sword/project.godot`，不另建平行工程。已实测 Godot 4.7 stable .NET（引擎版本串 `4.7.stable.mono`）+ .NET 10；当前选择 Compatibility 渲染器，程序集为 Idle-Sword。
 
 ```text
 AsmodeusGame/
@@ -32,7 +32,7 @@ AsmodeusGame/
     UI/                     主界面、共享控件、主题
     Assets/                 运行资源
   art_source/               可编辑美术源文件
-  tools/                    配置校验和导出工具
+  tools/                    配置校验、打包与素材生成工具
   tests/                    核心规则验证
 ```
 
@@ -65,6 +65,9 @@ AsmodeusGame/
 - 不要在 `RefreshSettings` 这类"把设置回填到控件"的路径里给 `ButtonPressed` 赋值：它的 setter 会发出 `Toggled`，于是"打开设置面板"会反过来触发一次应用显示设置并落盘。回填一律用 `SetPressedNoSignal`。
 - 退出最大化/全屏后不要在同一帧设窗口尺寸：操作系统会异步把窗口还原成进入之前的尺寸并盖掉这次设置。推迟一帧再套用。
 - 显示设置要落到真实窗口并接受真实控件的信号验证。只断言配置文件里的数值，会把"界面改了但窗口没动"整类问题放过去。
+- 打包不要只看 Godot 的退出码：`--export-release` 在导出失败时同样返回 0（godot#85062），只盯退出码会把坏包放过去。必须断言产物本身（exe 体积、不得出现外置 `.pck` 或 `data_*` 目录），再让打出来的 exe 拷到仓库外自己跑一遍。
+- 工程不能缺少 `Idle-Sword.sln`：Godot 的 .NET 导出靠它判断工程是否含 C# 代码，缺了它导出会**卡住不收尾**——留下一个 `*.tmp`，既不产出 exe 也不报错退出。该文件必须入库。
+- 安装导出模板（`.tpz`）时要剥掉归档里的 `templates/` 前缀：引擎找的是 `<版本目录>/windows_release_x86_64.exe`，整包原样解压会深一层，导出时报找不到模板。版本目录名由引擎版本串去掉最后两段得到（`4.7.stable.mono.official.<hash>` → `4.7.stable.mono`）。
 - 不把美术尺寸当作逻辑攻击距离。
 
 ## 规范
@@ -72,6 +75,9 @@ AsmodeusGame/
 - C# 类型、公开成员和文件使用 PascalCase；CSV 字段使用 snake_case，指定 CSV 文件名保留原大小写。
 - 模块职责、公开接口、公式、状态转换和非显然约束写中文注释。
 - 集中定义数值单位、属性叠加与数值表示，保留大数值扩展空间。
+- 发行打包固定为一条命令 `tools/PackWindows.ps1`，不引入第三方打包工具：Godot 官方的 `--export-release` 已经覆盖导出本身，外面的封装（Docker 镜像、各类 CI action、安装器）都只是它的薄壳，接进来只会多一层引擎版本对齐的负担。脚本负责官方命令没有的那部分——前置检查、模板安装、产物断言与独立运行验证。
+- 交付物是**单文件 exe**：`binary_format/embed_pck=true` 与 `dotnet/embed_build_outputs=true` 同时生效，引擎、PCK、C# 程序集都在同一个文件里，不存在"exe 与 pck 分家"的失败模式。
+- `tools/` 下的 PowerShell 脚本必须存成**带 BOM 的 UTF-8**：Windows PowerShell 5.1 不认识无 BOM 的 UTF-8，会把中文注释按 GBK 双字节解析，吞掉后面的引号与括号，报一堆莫名其妙的"缺少右括号"。
 - 文档、配置源表和代码进入版本控制；引擎缓存与构建产物不提交。
 - 配置写入通过开发工具完成；玩家运行进度保存到 `user://`，不覆盖配置源表。
 

@@ -15,4 +15,4 @@ Godot 参考文档：
 - https://docs.godotengine.org/en/stable/tutorials/rendering/multiple_resolutions.html
 - https://docs.godotengine.org/en/stable/tutorials/scripting/c_sharp/c_sharp_basics.html
 
-本机实际验证版本为 Godot 4.7.2 .NET；以可执行程序版本与构建结果为准。
+本机实际验证版本为 Godot 4.7 stable .NET（引擎版本串 `4.7.stable.mono`）；以可执行程序版本与构建结果为准。

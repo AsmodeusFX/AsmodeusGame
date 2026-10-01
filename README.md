@@ -4,7 +4,7 @@ Windows / Godot .NET / C# 横版修仙增量放置原型。
 
 ## 启动
 
-1. 安装 **Godot 4.7.2 .NET** 和 **.NET 10 SDK**（本机已验证版本：10.0.401）。
+1. 安装 **Godot 4.7 stable .NET**（引擎版本串为 `4.7.stable.mono`）和 **.NET 10 SDK**（本机已验证：10.0.301）。
 2. 在 Godot 项目管理器中导入 `idle-sword/project.godot`。
 3. 初次运行需要还原 Godot C# NuGet 包。在仓库根目录执行：
 
@@ -62,7 +62,27 @@ dotnet run --project tools/SoundGen -- idle-sword/Assets/Audio
 - 游戏使用 Godot `user://save_v1.json` 和 `save_v1.json.bak`。Windows 默认位置为 `%APPDATA%\Godot\app_userdata\Idle-Sword\`。
 - 存档不在 Git 仓库中，换电脑不会通过 Git 自动携带试玩进度。
 - 无离线收益。重进恢复保存时的关卡、位置、敌人状态与技能冷却；短期弹丸、区域、召唤物与战斗 Buff 会清理。
-- `export_presets.cfg` 已配置 Windows x86_64 导出和原始 CSV/资源映射包含规则。导出 EXE 需要另行安装对应版本导出模板；当前交付验证的是编辑器运行版本，未生成发行包。
+- `export_presets.cfg` 配置 Windows x86_64 导出与原始 CSV/资源映射包含规则，发行导出由下方的一条命令完成。
+
+## 打包 Windows 发行版
+
+一条命令产出**单个自包含**的 `artifacts/windows/Idle-Sword.exe`——引擎、PCK、C# 程序集全在这一个文件里，拷走单独双击即可运行：
+
+```powershell
+powershell -File tools/PackWindows.ps1 -InstallTemplates
+```
+
+`-InstallTemplates` 只有首次需要：脚本从 Godot 官方 release 下载对应版本的导出模板（约 1.1 GB），校验 SHA256 后**只解开 Windows 那一个模板文件**，之后重跑不再需要下载。
+
+脚本依次执行：前置检查（编辑器是 .NET 版且版本与工程一致、导出模板齐备、`Idle-Sword.sln` 存在、dotnet 可用、预设已启用单文件内嵌）→ 编译（警告即错误）→ 纯逻辑自检 → `--import` → 导出 → 产物断言 → **把打出来的 exe 拷到仓库外单独跑一遍**。
+
+最后一步是重点：Godot 的 `--export-release` 在导出失败时**也返回 0**，只盯退出码会把坏包放过去。脚本改为断言产物本身（exe 必须比引擎模板大，且目录里不能出现 `.pck` 或 `data_*`），再让成品自己跑一次 `--smoke-test` 并把启动行里的资源计数读出来，证明 Pack 里确实带了 CSV 与 JSON。
+
+```powershell
+powershell -File tools/PackWindows.ps1 -SkipBuild -SkipChecks -SkipImport   # 只重打包，快速迭代
+```
+
+每次会在 `artifacts/pack-preview.png` 留一张打包版的实际画面。**中文界面依赖系统字体 Microsoft YaHei，必须肉眼确认不是豆腐块**——字体缺失是静默的，不会抛异常。目标机器缺字体时的处理见 [资源规范](docs/art/asset_spec.md)。
 
 ## 换电脑继续开发
 

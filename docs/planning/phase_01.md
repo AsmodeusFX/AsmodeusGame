@@ -2,7 +2,7 @@
 
 ## 已实现
 
-- Godot 4.7.2 .NET / C# / net10.0 工程，1920×1080 设计空间、16:9 等比缩放。
+- Godot 4.7 stable .NET（引擎版本串 `4.7.stable.mono`）/ C# / net10.0 工程，1920×1080 设计空间、16:9 等比缩放。
 - `Core/Data`：CSV 标准引号解析和导出、数值与外键校验、首杀妖核投放约束、天赋环路检查。
 - `Core/State`：版本 1 快照、永久首杀账本、原子替换与备份恢复。
 - `Features/Battle`：纯 C# 固定步长会话，移动、刷怪、技能、敌人行为、伤害、复活、传送。
@@ -134,7 +134,7 @@ godot --headless --path idle-sword --import   # 必须跑，否则 GD.Load 拿�
 - 设置与进度分文件存放，因此「重置进度」不会连带清掉画面与音量偏好。
 - 场上怪物不因数量上限被删除；仅表现层限制最多绘制 80 个可见怪物。超大规模压力测试、空间查询优化与对象池后续根据实测追加。
 - 目前是同一 GameSession 的分文件功能实现，避免功能互相操作 UI。复杂系统细化时可再拆独立服务。
-- Windows EXE 导出预设已提供，发行导出与打包尚未验证。
+- 发行打包固定为一条命令 `tools/PackWindows.ps1`，产出**单文件** exe（`binary_format/embed_pck` 与 `dotnet/embed_build_outputs` 同时生效）。刻意不引入第三方打包工具：Godot 官方的 `--export-release` 已覆盖导出本身，外面的封装都只是它的薄壳。取舍与断言清单见 [../technical/architecture.md](../technical/architecture.md)。
 - 最小化不主动暂停，也不使用焦点暂停；系统睡眠和长时间操作系统挂起不作为离线收益补算机制，需后续专项挂机压力测试。
 
 ## 验证记录
@@ -162,6 +162,11 @@ godot --headless --path idle-sword --import   # 必须跑，否则 GD.Load 拿�
 - `SFX PLAYS` 行会打印被抑制的次数（`throttled=`），无窗口自检为 11、带渲染自检为 23，说明闸门在真实运行路径上确实生效。
 - **已知的退出噪声（非真实泄漏）**：Godot 的退出泄漏检查跑在 .NET GC 之前，会偶发报 "ObjectDB instances were leaked / resources still in use"。同一份二进制连续运行会出现「0 / 13 / 33」的浮动，加 `--verbose` 的那次为 0，故判定为 GC 时机产物而非泄漏。`Main._ExitTree` 已主动释放播放器持有的流引用以减少残留。
 - QA 使用隔离的新会话，不修改正常游戏存档。
+- 发行打包端到端验证（`tools/PackWindows.ps1`，30 项断言全过、退出码 0）：产出单文件 `artifacts/windows/Idle-Sword.exe` 196,126,136 字节（187.0 MB），大于 104 MB 的引擎模板，证明 PCK 与 .NET 程序集确实内嵌；产物目录只有这一个文件，无外置 `.pck`、无 `data_*` 目录。同参数重跑得到**逐字节相同**的 exe（SHA256 `571B054F…3BDA`）。
+- 打包版被拷到**仓库外**单独运行（不依赖源码目录，也不依赖任何兄弟文件）：无窗口自检退出码 0 并打印 `UI SMOKE PASS`；启动行的 `levels=100 skills=15 audio=15 sfx_voices=8` 证明 Pack 里确实带了原始 CSV、`visuals.json` 与 `audio.json`，而不只是带了个引擎。带窗口截图 1600×900 且非空白，人工核对中文界面无缺字——**字体缺失是静默的，只有看图才查得出来**，所以这一步保留为人工关卡。
+- 打包断言的非空验证（针对 `Idle-Sword.sln`）：临时移走该文件后直接调 Godot 官方导出，命令**卡住不收尾**——10 分钟无任何输出，只留下一个 109.8 MB 的 `*.tmp`，既不产出 exe 也不报错退出。没有它，`dotnet publish` 被静默跳过，而导出看起来"正常进行"。脚本因此把它列为前置检查项，该文件必须入库。
+- 导出模板（`.tpz`）安装时剥掉归档里的 `templates/` 前缀，只解开 Windows 那一个模板（约 104 MB），不落盘其余约 1 GB 的其他平台模板；下载按官方 release 的字节数与 SHA256 双重校验。
+- Godot 侧退出码不作为判据：`--export-release` 在导出失败时同样返回 0（godot#85062），`--import` 的退出码也不可靠（godot#83449）。打包脚本改为断言产物本身（体积、不得有外置 `.pck`/`data_*`），并让成品自己跑一遍。
 
 ## 下一轮优先内容
 

@@ -9,3 +9,12 @@
 - 背景由独立 BattleView 表现代码绘制三层山景与林木，没有复用参考游戏美术。
 - 中文界面使用系统字体 Microsoft YaHei，备用 Noto Sans CJK SC；未复制或分发系统字体文件。发行前再选定可随游戏分发的字体资源。
 - 未来可编辑原稿统一放外层 `art_source/`，运行导出物放 `Assets/`，素材来源和授权说明随资源记录。
+
+## 音频（同属资源替换规范）
+
+- `idle-sword/Assets/audio.json`：音频 ID 到资源路径的唯一映射，形式与 `visuals.json` 一致。**替换音频只改这个文件**，不需要动代码。
+- `Assets/Audio/`：当前是 `tools/SoundGen/` 程序化合成的 8bit 占位素材，16bit PCM 单声道 22050Hz WAV。
+- 换成同格式 WAV 即可直接替换；换 ogg/mp3 只需改映射路径。若换用压缩格式，`Audio.cs` 里的循环参数设置会跳过（样本数无法按字节数推算），需要在导入器里设好循环点。
+- 导入设置统一 `compress/mode=0`（16bit PCM）。该枚举在 Godot 4.7 里与旧文档不一致，实测 `0`=PCM 16bit、`1`=IMA-ADPCM(4bit)、`2`=QOA；新导入的 WAV 默认走有损压缩，会削掉方波的硬边，需要手动改回。
+- 音效按**剑诀 kind**（projectile/target/ground/buff/summon）分 5 种释放音，不按剑诀或元素区分；BGM 目前只有一首通用战斗曲。
+- 这些是让设计可辨识、可验证的占位素材，**不是最终音频设计**；后续正式配乐与音效设计可整体替换。

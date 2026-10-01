@@ -84,6 +84,13 @@
 | max_level | integer | 最大等级 |
 | cost | number | 基础升级成本；具体成长规则见下方 |
 | cost_growth | number | 剑诀升级消耗指数倍率 |
+| description | string | 技能说明文字，用于界面展示 |
+| secondary | enum（可空） | 次级效果：pierce / multi / slow / stun / dot / vulnerable / lifesteal / execute / shield / regen；空表示无 |
+| secondary_value | number | 次级效果强度（multi 为目标数；stun / pierce 可忽略） |
+| secondary_duration | number | 次级效果持续时间（秒）；瞬发 / 参数类可为 0 |
+| aoe_radius | number | 范围半径（ground 类）；0 表示单体，默认沿用 220 |
+
+次级效果分两类：状态类（slow 减速 / stun 眩晕 / dot 灼烧 / vulnerable 易伤 / lifesteal 吸血 / execute 斩杀 / shield 护盾 / regen 回血）作用于目标或自身；参数类（pierce 穿透 / multi 多重）改变命中方式。详见 `docs/design/sword_skills.md`。
 
 ## Talent.csv
 

@@ -20,6 +20,17 @@ public static class UiKit
         label.AddThemeFontSizeOverride("font_size", size); label.AddThemeColorOverride("font_color", color ?? Text);
         Place(label, x, y, w, h); parent.AddChild(label); return label;
     }
+    /// <summary>
+    /// 自动换行标签。必须先开启换行再定尺寸：Label 未开换行时最小宽度等于整行文字宽度，
+    /// 此时设置 Size 会被夹回整行宽度，导致换行不按给定宽度生效（长句会溢出容器）。
+    /// </summary>
+    public static Label Wrapped(Control parent, string text, float x, float y, float w, float h, int size = 22, Color? color = null)
+    {
+        var label = Label(parent, text, x, y, w, h, size, color);
+        label.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        Place(label, x, y, w, h);
+        return label;
+    }
     public static Button Button(Control parent, string text, float x, float y, float w, float h, Action action, bool accent = false)
     {
         var button = new Button { Text = text, MouseDefaultCursorShape = Control.CursorShape.PointingHand, FocusMode = Control.FocusModeEnum.All };
@@ -28,7 +39,8 @@ public static class UiKit
         button.AddThemeStyleboxOverride("pressed", Box(new Color("#446966"), 6, Gold));
         button.AddThemeStyleboxOverride("focus", Box(new Color(0, 0, 0, 0), 6, Gold));
         button.AddThemeColorOverride("font_color", accent ? Gold : Text); button.AddThemeFontSizeOverride("font_size", 21);
-        Place(button, x, y, w, h); parent.AddChild(button); button.Pressed += action; return button;
+        // 点击音在 action 之前：失败的按钮会连播"点击 + 否决"，符合先点再判的听感。
+        Place(button, x, y, w, h); parent.AddChild(button); button.Pressed += () => { Sfx.Click(); action(); }; return button;
     }
     public static Panel PanelAt(Control parent, float x, float y, float w, float h)
     {

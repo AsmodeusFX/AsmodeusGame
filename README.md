@@ -49,6 +49,14 @@ godot --headless --path idle-sword -- --smoke-test
 
 `--smoke-test` 使用独立的新会话、不写正常存档，遍历页面并测试天赋按钮与鼠标收取信号。`--capture <绝对PNG路径>` 在带渲染的同类验证中生成各页面截图，输出目录需已存在。
 
+音频素材由 `tools/SoundGen/` 程序化生成，产物已入库，正常开发不需要重跑：
+
+```powershell
+dotnet run --project tools/SoundGen -- idle-sword/Assets/Audio
+```
+
+改过音频或拉到含新音频的提交后，`--import` 这一步是必须的（`.godot/` 不入库），否则运行时加载不到素材。
+
 ## 存档与导出
 
 - 游戏使用 Godot `user://save_v1.json` 和 `save_v1.json.bak`。Windows 默认位置为 `%APPDATA%\Godot\app_userdata\Idle-Sword\`。
@@ -58,4 +66,4 @@ godot --headless --path idle-sword -- --smoke-test
 
 ## 换电脑继续开发
 
-提交并推送整个 `AsmodeusGame` 仓库，包括 `docs/`、`idle-sword/` 和 `tests/`。家中拉取后安装同版本工具，从 [文档索引](docs/README.md) 接续；无需依赖本地会话同步。不要提交 `.godot/`、`bin/`、`obj/`、`artifacts/`。
+提交并推送整个 `AsmodeusGame` 仓库，包括 `docs/`、`idle-sword/`、`tools/` 和 `tests/`。家中拉取后安装同版本工具，从 [文档索引](docs/README.md) 接续；无需依赖本地会话同步。不要提交 `.godot/`、`bin/`、`obj/`、`artifacts/`。

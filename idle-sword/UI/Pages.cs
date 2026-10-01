@@ -35,6 +35,26 @@ public partial class Main
         }
         UiKit.Label(_page, "沿连线点击节点精进   ·   静心自悟解锁自动参悟   ·   横向可滚动", 22, 296, 1500, 24, 16, UiKit.Muted);
     }
+    /// <summary>技能预览页：15 个剑诀各一个按钮，逐个对照表现与数值。</summary>
+    private void PreviewPage()
+    {
+        var ids = PreviewSkillIds;
+        var skill = _game.Config.Skills[PreviewSkillId];
+        UiKit.Label(_page, "技能预览", 20, 0, 220, 36, 26, UiKit.Gold);
+        UiKit.Label(_page, PreviewSummary(skill), 210, 2, 1180, 34, 19, UiKit.Jade);
+        UiKit.Button(_page, "◀ 上一个", 1310, 0, 175, 36, () => { SelectPreviewSkill(_previewSkill - 1); ShowPage(_selectedTab); Refresh(); });
+        UiKit.Button(_page, "下一个 ▶", 1495, 0, 175, 36, () => { SelectPreviewSkill(_previewSkill + 1); ShowPage(_selectedTab); Refresh(); });
+        UiKit.Button(_page, "退出预览", 1680, 0, 180, 36, TogglePreview);
+        int i = 0;
+        foreach (string id in ids)
+        {
+            var row = _game.Config.Skills[id]; int index = i++;
+            var button = UiKit.Button(_page, row.Name, index % 5 * 376, 42 + index / 5 * 78, 356, 70,
+                () => { SelectPreviewSkill(index); ShowPage(_selectedTab); Refresh(); }, id == PreviewSkillId);
+            button.TooltipText = row.Description;
+        }
+        UiKit.Label(_page, skill.Description, 20, 276, 1840, 36, 19, UiKit.Muted);
+    }
     private void SkillPage()
     {
         int i = 0;
@@ -43,7 +63,7 @@ public partial class Main
             float x = i++ * 376; string rid = realm.Text("id"); bool unlocked = _game.State.Realms.Contains(rid);
             UiKit.PanelAt(_page, x, 0, 358, 316);
             UiKit.Label(_page, realm.Text("name"), x + 18, 8, 130, 40, 29, UiKit.Gold);
-            if (!unlocked) UiKit.Button(_page, $"突破 {UiKit.Number(realm.Number("cost_gold"))}", x + 154, 12, 184, 38, () => Act(() => _game.UnlockRealm(rid)));
+            if (!unlocked) UiKit.Button(_page, $"突破 {UiKit.Number(realm.Number("cost_gold"))}", x + 154, 12, 184, 38, () => Act(() => _game.UnlockRealm(rid), "sfx_breakthrough"));
             else UiKit.Label(_page, "境界已开启", x + 180, 13, 150, 35, 18, UiKit.Jade);
             int j = 0;
             foreach (var skill in _game.Config.Skills.Values.Where(s => s.Realm == rid))
@@ -54,6 +74,7 @@ public partial class Main
                 var button = UiKit.Button(_page, "", x + 18, y + 31, 320, 36, () => Act(() => _game.UpgradeSkill(sid)));
                 _bindings.Add(() => button.Text = $"{(_game.State.Skills.GetValueOrDefault(sid) > 0 ? "强化" : "习得")} · {UiKit.Number(_game.SkillCost(sid))} 灵钱");
                 button.Disabled = !unlocked;
+                button.TooltipText = skill.Description;
             }
         }
     }

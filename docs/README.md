@@ -5,6 +5,8 @@
 ## 文档索引
 
 - [已确认规则与待确认边界](design/core_rules.md)
+- [十五剑诀设计](design/sword_skills.md)
+- [剑意系统设计（草案，待讨论）](design/sword_intent.md)
 - [工程框架方案](technical/architecture.md)
 - [配置表规划](data/config_plan.md)
 - [CSV 字段字典](data/fields.md)

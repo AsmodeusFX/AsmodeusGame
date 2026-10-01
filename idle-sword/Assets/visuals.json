@@ -8,5 +8,8 @@
   "rift": "res://Assets/Sprites/rift.svg",
   "pet_azure": "res://Assets/Sprites/pet_azure.svg",
   "pet_crimson": "res://Assets/Sprites/pet_crimson.svg",
-  "pet_snow": "res://Assets/Sprites/pet_snow.svg"
+  "pet_snow": "res://Assets/Sprites/pet_snow.svg",
+  "summon_shadow": "res://Assets/Sprites/summon_shadow.svg",
+  "summon_taixu": "res://Assets/Sprites/summon_taixu.svg",
+  "summon_zhuxie": "res://Assets/Sprites/summon_zhuxie.svg"
 }

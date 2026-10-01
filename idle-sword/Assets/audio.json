@@ -1,0 +1,17 @@
+{
+  "bgm_battle": "res://Assets/Audio/bgm_battle.wav",
+  "sfx_cast_projectile": "res://Assets/Audio/sfx_cast_projectile.wav",
+  "sfx_cast_target": "res://Assets/Audio/sfx_cast_target.wav",
+  "sfx_cast_ground": "res://Assets/Audio/sfx_cast_ground.wav",
+  "sfx_cast_buff": "res://Assets/Audio/sfx_cast_buff.wav",
+  "sfx_cast_summon": "res://Assets/Audio/sfx_cast_summon.wav",
+  "sfx_hit": "res://Assets/Audio/sfx_hit.wav",
+  "sfx_hit_heavy": "res://Assets/Audio/sfx_hit_heavy.wav",
+  "sfx_kill": "res://Assets/Audio/sfx_kill.wav",
+  "sfx_click": "res://Assets/Audio/sfx_click.wav",
+  "sfx_panel": "res://Assets/Audio/sfx_panel.wav",
+  "sfx_buy": "res://Assets/Audio/sfx_buy.wav",
+  "sfx_deny": "res://Assets/Audio/sfx_deny.wav",
+  "sfx_reward": "res://Assets/Audio/sfx_reward.wav",
+  "sfx_breakthrough": "res://Assets/Audio/sfx_breakthrough.wav"
+}

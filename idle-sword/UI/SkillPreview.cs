@@ -114,9 +114,27 @@ public partial class Main
             "execute" => $"斩杀 阈值 {skill.SecondaryValue:P0}",
             "shield" => $"护盾 攻击×{skill.SecondaryValue:0.##} / {skill.SecondaryDuration:0.#}s",
             "regen" => $"回血 {skill.SecondaryValue:P0}/秒 / {skill.SecondaryDuration:0.#}s",
+            "haste" => $"攻速 +{skill.SecondaryValue:P0} / {skill.SecondaryDuration:0.#}s",
+            "crit_reduce" => $"暴击 +{skill.SecondaryValue:P0} / {skill.SecondaryDuration:0.#}s · 暴击缩冷却 {skill.SecondaryExtra:0.##}s",
             _ => skill.Secondary,
         };
+        // 飞行形态摘要：审核弹道时最需要核对的就是"几支、怎么飞、范围多大、出剑节奏"。
+        // 这一行要与翻页按钮抢宽度，所以用词从简；有形态时不再重复"无次级效果"（三个形态都没次级效果）。
+        string speed = skill.Speed > 0 ? $" · 速度 {skill.Speed:0}" : "";
+        string interval = skill.VolleyInterval > 0 ? $" · 错时 {skill.VolleyInterval:0.##}" : "";
+        string shape = skill.Trajectory switch
+        {
+            "hover_homing" => $"悬浮追踪 ×{skill.ProjectileCount} · 停 {skill.HoverTime:0.##}s{interval}",
+            "sky_drop" => $"空降剑阵 ×{skill.ProjectileCount} · 间距 {skill.Spread:0} · 落点 {skill.AoeRadius:0}"
+                + $" · 停 {skill.HoverTime:0.##}s · 高差 {skill.SpawnJitter:0}{interval}",
+            "arc_homing" => $"弧线 ×{skill.ProjectileCount} · 弧高 {skill.ArcMin:0}~{skill.ArcMax:0}{interval}{speed}",
+            "line_shot" => $"肩侧平射 ×{skill.ProjectileCount} · 间距 {skill.Spread:0} · 命中即散{interval}{speed}"
+                + (skill.PierceChance > 0 ? $" · 概率穿透 {skill.PierceChance:P0}" : ""),
+            "line_pierce" => $"平射贯穿 ×{skill.ProjectileCount} · 间距 {skill.Spread:0}{interval}{speed}",
+            _ => skill.Kind == "projectile" && skill.ProjectileCount > 1 ? $"直线追踪 ×{skill.ProjectileCount}{interval}" : "",
+        };
         string realm = _game.Config.Row("SwordLevel", skill.Realm).Text("name");
-        return $"{realm} · {skill.Kind} · 冷却 {skill.Cooldown:0.#}s · 射程 {skill.Range:0} · 威力 ×{skill.Power:0.##} · {secondary}";
+        string tail = shape == "" ? secondary : skill.Secondary == "" ? shape : $"{secondary} · {shape}";
+        return $"{realm} · {skill.Kind} · 冷却 {skill.Cooldown:0.#}s · 射程 {skill.Range:0} · 威力 ×{skill.Power:0.##} · {tail}";
     }
 }

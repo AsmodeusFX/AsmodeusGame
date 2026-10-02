@@ -147,7 +147,10 @@ public partial class Main : Control
                 for (int i = 0; i < 5; i++) _game.Step(_game.Config.Setting("fixed_step"));
                 await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             }
-            if (SfxCount("sfx_hit") + SfxCount("sfx_hit_heavy") == 0) throw new Exception("Hit SFX never fired");
+            // 炼气期只有御剑术，50 伤害一击秒掉 45 血的青苔妖：敌人是在同一个 Step 内"从列表消失"，
+            // 血量差分看不到掉血，走的是击杀路径而不是命中路径。因此这里只要求"伤害反馈发生过"，
+            // 两个命中分支各自由下面专门的高血靶子断言覆盖。
+            if (SfxCount("sfx_hit") + SfxCount("sfx_hit_heavy") + SfxCount("sfx_kill") == 0) throw new Exception("No combat feedback SFX fired");
             // 击杀音：死亡的敌人已在同一次 Step 里被移除，表现层只能靠"从列表消失"判定，这里专门验证那条路径。
             if (SfxCount("sfx_kill") == 0)
             {
@@ -159,9 +162,28 @@ public partial class Main : Control
                 await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             }
             if (SfxCount("sfx_kill") == 0) throw new Exception("Kill SFX never fired");
-            // 普通命中分支要单独验证：1 级角色几乎一击秒杀，伤害占比总是越过重击阈值，
-            // 自然战斗只会走到重击分支。这里把血量拉高，让单次伤害落进普通命中区间。
+            // 重击分支（伤害占比 ≥ 12%）：初期御剑术一击秒杀小怪，敌人是"消失"而非掉血，自然战斗走不到这条分支。
+            // 血量取 12 倍攻击，同时满足两个边界：单支剑 2×攻击 → 占比 17%（判为重击）；
+            // 多发剑诀一轮齐射（3 支 = 6×攻击）也打不死它——否则它会在同一帧内被移除，只剩击杀音。
             var slime = _game.Config.Monsters["slime"];
+            double heavyHp = Math.Max(1, _game.Attack) * 12;
+            var heavyTank = new EnemyState
+            {
+                Id = _game.Battle.NextEnemyId++, MonsterId = slime.Id, Kind = slime.Kind,
+                X = _game.Battle.PlayerX + 200, Hp = heavyHp, MaxHp = heavyHp, Atk = 0, AttackTimer = 999,
+            };
+            _game.Battle.Enemies.Add(heavyTank);
+            for (int frame = 0; frame < 20 && SfxCount("sfx_hit_heavy") == 0; frame++)
+            {
+                for (int i = 0; i < 5; i++) _game.Step(_game.Config.Setting("fixed_step"));
+                await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+            }
+            if (SfxCount("sfx_hit_heavy") == 0) throw new Exception("Heavy hit SFX never fired");
+            // 靶子必须撤掉：它血量是攻击的六倍、要挨三下才死，留着会挡在下面那个普通命中靶子前面，
+            // 而带渲染运行时每帧只推进 5 个固定步，普通命中断言的预算不够等它先倒下。
+            _game.Battle.Enemies.Remove(heavyTank);
+            // 普通命中分支要单独验证：伤害占比要低于 12%，这里把血量拉到 400 倍攻击。
+
             double tankHp = Math.Max(1, _game.Attack) * 400;
             _game.Battle.Enemies.Add(new()
             {
@@ -224,6 +246,22 @@ public partial class Main : Control
             if (summonXs.Distinct().Count() != 3) throw new Exception("Summons overlapped on screen: " + string.Join(",", summonXs));
             if (summonXs.All(x => x > 330) || summonXs.All(x => x < 330)) throw new Exception("Summons all stacked on one side");
             foreach (var fake in fakes) _game.Effects.Remove(fake);
+            // 自定飞行形态的站位与边界：多支剑必须错开、且不得越出战斗可用区（local y 0..400 之外会被裁掉，
+            // 更上面是顶栏、更下面是养成面板）。落点 X 由 Core 冻结，这里只核对表现层的编排函数。
+            var hover = Enumerable.Range(0, 5).Select(i => BattleView.HoverSlot(i, 5)).ToArray();
+            if (hover.Select(p => p.X).Distinct().Count() != 5) throw new Exception("Hover blades overlap: " + string.Join(",", hover.Select(p => p.X)));
+            if (hover.Any(p => p.Y < 10 || p.Y > 360)) throw new Exception("Hover blades out of bounds: " + string.Join(",", hover.Select(p => p.Y)));
+            if (Enumerable.Range(0, 5).Select(BattleView.SkyDropTop).Distinct().Count() < 3) throw new Exception("Sky drop lanes overlap");
+            // 平射剑阵（御剑术）：身前身后都要有、横向互不重叠、且落在肩部一带（不压顶栏、也不压下方界面）。
+            var volley = Enumerable.Range(0, 5).Select(i => BattleView.VolleySlot(i, 5, 28)).ToArray();
+            if (volley.Select(p => p.X).Distinct().Count() != 5) throw new Exception("Volley blades overlap: " + string.Join(",", volley.Select(p => p.X)));
+            if (volley.Any(p => p.Y < 200 || p.Y > 280)) throw new Exception("Volley blades off the shoulder line: " + string.Join(",", volley.Select(p => p.Y)));
+            if (volley.All(p => p.X > 330) || volley.All(p => p.X < 330)) throw new Exception("Volley blades all on one side of the caster");
+            // 剑形多边形按角度旋转：0° 剑尖朝右、+90° 朝下。两种角度不能退化成一堆相同的点。
+            var right = BattleView.BladePolygon(0, 0, 0, 60, 10);
+            var down = BattleView.BladePolygon(0, 0, Math.PI / 2, 60, 10);
+            if (right.Select(p => p.X).Max() <= 0 || down.Select(p => p.Y).Max() <= 0) throw new Exception("Blade tip does not follow its angle");
+            if (right.Select(p => (p.X, p.Y)).Distinct().Count() < 4) throw new Exception("Blade polygon degenerated");
             // 首杀奖励音由 FirstKills 账本增加触发。自检跑不到 BOSS，这里直接改账本触发一次；
             // 测试模式不写存档（Save 会直接返回），不会污染进度。
             _game.State.FirstKills.Add(_game.Level.Id);
@@ -265,8 +303,12 @@ public partial class Main : Control
             // 用 GM 按钮发放后续步骤所需资源：既覆盖 GM→GameSession 接线，也避免界面直接改写钱包。
             Tap("GM");
             if (_game.State.Amount("gold") < 10000 || _game.State.Amount("core") < 10000) throw new Exception("GM UI action failed");
-            ShowPage(1); Refresh(); Press("习得");
-            if (_game.State.Skills.GetValueOrDefault("skill_02") != 1) throw new Exception("Skill UI action failed");
+            // 取"属于已解锁境界且尚未习得"的技能，而不是写死某个 id：技能书序会随设计调整重排，
+            // 写死 id 的话每次重排都会在这里断掉。要在点按钮**之前**取，否则取到的是下一个还没学的。
+            ShowPage(1); Refresh();
+            var learnable = _game.Config.Skills.Values.First(s => _game.State.Realms.Contains(s.Realm) && _game.State.Skills.GetValueOrDefault(s.Id) == 0);
+            Press("习得");
+            if (_game.State.Skills.GetValueOrDefault(learnable.Id) != 1) throw new Exception("Skill UI action failed");
             ShowPage(2); Refresh(); Press("打造并装备"); Press("淬炼");
             if (_game.State.Weapon != "sword_wood" || _game.State.WeaponLevel != 1) throw new Exception("Forge UI action failed");
             ShowPage(4); Refresh(); Press("召唤");

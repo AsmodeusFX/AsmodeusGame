@@ -3,7 +3,7 @@ namespace IdleSword.Core;
 public sealed record MonsterDef(string Id, string Name, string Kind, double Hp, double Atk, double Range, double Interval, double Speed, string Attack, double Gold, string Visual);
 public sealed record LevelDef(string Id, string Name, int Order, int Cells, double HpScale, double AtkScale, double EliteHp, double EliteAtk, double BossHp, double BossAtk, double RiftHp, string Wave, string Boss, string Rift, string FirstReward, string RepeatReward);
 public sealed record WaveDef(string Id, string Monster, int Count, double Interval, int EliteEvery, string Elite);
-public sealed record SkillDef(string Id, string Name, string Realm, string Kind, double Cooldown, double Range, double Power, double Duration, int MaxLevel, double Cost, double CostGrowth, string Description, string Secondary, double SecondaryValue, double SecondaryDuration, double AoeRadius);
+public sealed record SkillDef(string Id, string Name, string Realm, string Kind, double Cooldown, double Range, double Power, double Duration, int MaxLevel, double Cost, double CostGrowth, string Description, string Secondary, double SecondaryValue, double SecondaryDuration, double AoeRadius, string Trajectory, int ProjectileCount, double HoverTime, double ArcMin, double ArcMax, double Speed, double Spread, double VolleyInterval, double VolleyJitter, double SpawnJitter, double PierceChance, double SecondaryExtra);
 
 /// <summary>唯一配置入口。读取源 CSV 后校验并建立索引，运行时不修改配置对象。</summary>
 public sealed class GameConfig
@@ -65,9 +65,36 @@ public sealed class GameConfig
             c.Ref(r, "realm_id", "SwordLevel"); Choice(r, "kind", "projectile", "target", "ground", "buff", "summon");
             foreach (var key in new[] { "cooldown", "range", "power", "duration", "max_level", "cost", "cost_growth" }) Positive(r, key);
             var secondary = r.Text("secondary");
-            if (secondary != "") Choice(r, "secondary", "pierce", "multi", "slow", "stun", "dot", "vulnerable", "lifesteal", "execute", "shield", "regen");
-            Nonnegative(r, "secondary_value", "secondary_duration", "aoe_radius");
-            c.Skills.Add(r.Text("id"), new(r.Text("id"), r.Text("name"), r.Text("realm_id"), r.Text("kind"), r.Number("cooldown"), r.Number("range"), r.Number("power"), r.Number("duration"), r.Int("max_level"), r.Number("cost"), r.Number("cost_growth"), r.Text("description"), secondary, r.Number("secondary_value"), r.Number("secondary_duration"), r.Number("aoe_radius")));
+            if (secondary != "") Choice(r, "secondary", "pierce", "multi", "slow", "stun", "dot", "vulnerable", "lifesteal", "execute", "shield", "regen", "haste", "crit_reduce");
+            Nonnegative(r, "secondary_value", "secondary_duration", "aoe_radius", "secondary_extra", "pierce_chance");
+            if (r.Number("pierce_chance") > 1) throw r.Error("pierce_chance", "是概率，取值 0～1");
+            // 飞行形态：空 = bolt（原直线弹道，行为不变）。形态与数量都落在配置里，
+            // 同类弹道的新技能只改 CSV，不必新增 kind（音效映射与五 kind 自检因此不受影响）。
+            var trajectory = r.Text("trajectory");
+            var count = r.Int("projectile_count");
+            if (trajectory != "")
+            {
+                Choice(r, "trajectory", "bolt", "hover_homing", "sky_drop", "arc_homing", "line_pierce", "line_shot");
+                if (r.Text("kind") != "projectile") throw r.Error("trajectory", "仅 projectile 可使用自定义飞行形态");
+            }
+            if (count < 1) throw r.Error("projectile_count", "至少 1");
+            if (r.Text("kind") != "projectile" && count != 1) throw r.Error("projectile_count", "非 projectile 只能为 1");
+            Nonnegative(r, "hover_time", "arc_max", "spread", "volley_interval", "volley_jitter", "spawn_jitter");
+            // 弧度允许为负：负值表示从下方掠过（上方空间多、下方少）。下限 -60，再大就会插进地面与下方 UI。
+            if (r.Number("arc_min") < -60) throw r.Error("arc_min", "下弧不得超过 -60（会越出地面与下方界面）");
+            if (r.Number("arc_min") > r.Number("arc_max")) throw r.Error("arc_min", "不能大于 arc_max");
+            if (trajectory == "arc_homing")
+            {
+                // 弧顶 = 发射高度约 300 − 弧高；弧高超过 300 会顶出战斗区上沿（表现层另有夹取兜底，此处提前拦住手改配置）。
+                if (r.Number("arc_max") <= 0) throw r.Error("arc_max", "弧线形态需要正的弧度上界");
+                if (r.Number("arc_max") > 300) throw r.Error("arc_max", "弧度超过 300 会越出战斗画面");
+            }
+            // 落点判定半径复用 aoe_radius：ground 在 0 时回退 220，天降形态绝不允许回退（否则会变成来路不明的大范围）。
+            if (trajectory == "sky_drop" && r.Number("aoe_radius") <= 0) throw r.Error("aoe_radius", "天降形态需要正的落点判定半径");
+            // 弹速：0 表示沿用默认 1500（宠物弹与召唤弹也走那个默认值，不受本列影响）。
+            var speed = r.Number("speed");
+            if (speed != 0 && speed < 100) throw r.Error("speed", "0 表示默认 1500；显式配置时必须 ≥ 100");
+            c.Skills.Add(r.Text("id"), new(r.Text("id"), r.Text("name"), r.Text("realm_id"), r.Text("kind"), r.Number("cooldown"), r.Number("range"), r.Number("power"), r.Number("duration"), r.Int("max_level"), r.Number("cost"), r.Number("cost_growth"), r.Text("description"), secondary, r.Number("secondary_value"), r.Number("secondary_duration"), r.Number("aoe_radius"), trajectory, count, r.Number("hover_time"), r.Number("arc_min"), r.Number("arc_max"), speed, r.Number("spread"), r.Number("volley_interval"), r.Number("volley_jitter"), r.Number("spawn_jitter"), r.Number("pierce_chance"), r.Number("secondary_extra")));
         }
         foreach (var r in c.Rows("Talent"))
         {

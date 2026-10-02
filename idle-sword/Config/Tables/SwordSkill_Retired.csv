@@ -1,0 +1,6 @@
+id,name,realm_id,kind,cooldown,range,power,duration,max_level,cost,cost_growth,description,secondary,secondary_value,secondary_duration,aoe_radius,trajectory,projectile_count,hover_time,arc_min,arc_max,speed,spread,volley_interval,volley_jitter,spawn_jitter,pierce_chance,secondary_extra
+skill_01,御气飞剑,realm_0,projectile,1.2,950,1,2,50,30,1.22,御使飞剑贯穿前方，剑气可穿透沿途所有敌人。,pierce,0,0,0,bolt,1,0,0,0,0,0,0,0,0,0,0
+skill_06,疾风剑,realm_1,projectile,1.5,950,0.85,2,50,120,1.22,疾风剑分袭，同时攻击多个敌人。,multi,3,0,0,bolt,1,0,0,0,0,0,0,0,0,0,0
+skill_11,流火剑,realm_3,projectile,1.3,950,0.95,2,50,482,1.22,流火灼烧，命中后附加持续灼烧伤害。,dot,0.15,3,0,bolt,1,0,0,0,0,0,0,0,0,0,0
+skill_04,护心剑罡,realm_1,buff,9,950,1.3,5,50,69,1.22,剑罡护体，短时提升造成的伤害并凝聚护盾。,shield,0.5,5,0,,1,0,0,0,0,0,0,0,0,0,0
+skill_09,归元护法,realm_2,buff,10,950,1.15,5,50,277,1.22,归元调息，短时提升伤害并持续恢复气血。,regen,0.03,5,0,,1,0,0,0,0,0,0,0,0,0,0

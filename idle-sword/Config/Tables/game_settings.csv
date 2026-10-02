@@ -2,8 +2,6 @@ id,value
 starting_gold,120
 cell_width,1920
 respawn_seconds,2
-basic_cooldown,1.1
-basic_range,1000
 pet_draw_cost,150
 pet_duplicate_gold,40
 fixed_step,0.05

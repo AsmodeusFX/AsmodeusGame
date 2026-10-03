@@ -28,10 +28,22 @@ public sealed partial class GameSession
     public double Attack => (Config.Attr("atk") + WeaponAttack) * (1 + Config.Attr("atk_percent") + TalentBonus("atk"));
     public double WeaponAttack => State.Weapon == "" ? 0 : Config.Row("Equip", State.Weapon).Number("base_atk") * (1 + .15 * State.WeaponLevel) * State.WeaponRoll;
     /// <summary>角色能打到的最大距离：取已习得剑诀的最大射程（不含 buff 类，它们不造成伤害）。
-    /// 已移除普攻概念，接近裂隙的停步判定以剑诀射程为准（原来用的 basic_range 已删除）。
+    /// **只算剑诀，不并入普攻射程**：接近裂隙的停步判定靠它，若改由普攻射程决定，
+    /// 角色会停在裂隙射程外空转（见 Step 里裂隙解锁那段的说明）。普攻射程单列在 `fightattr.basic_range`，
+    /// 它不小于停步距离 640，因此角色站定时普攻必定够得着。
     /// 正常流程下必有御剑术（境界 1 首个剑诀由构造器解锁），故不会出现 0 射程导致走到关底空转。</summary>
     public double AttackRange => State.Skills.Where(kv => kv.Value > 0 && Config.Skills.TryGetValue(kv.Key, out var s) && s.Kind != "buff")
         .Select(kv => Config.Skills[kv.Key].Range).DefaultIfEmpty(0).Max();
+
+    /// <summary>普攻占用的冷却键。放进 Battle.Cooldowns 是为了复用 Step 里那唯一的冷却衰减点：
+    /// 攻速增益因此自动作用于普攻，键本身也随存档往返（SaveStore 不校验冷却键，旧存档缺该键即视为就绪）。
+    /// **绝不能放进 State.Skills**：存档校验会用 SwordSkill 表核对技能键，且 CastSkills 对键是无保护索引。</summary>
+    public const string BasicAttackKey = "basic_attack";
+
+    /// <summary>普攻开关。开启时角色每 `fightattr.basic_interval` 秒向最近的合法目标平射一柄飞剑，
+    /// 并在出手的那一刻摇各真诀的触发概率（见 TickBasicAttack）。
+    /// 自检里关掉它是为了给受控靶场保留确定的伤害预算——普攻每秒都在加伤害，也会消耗随机数。</summary>
+    public bool BasicAttackEnabled { get; set; } = true;
 
     public GameSession(GameConfig config, PlayerState? state = null, int? seed = null)
     {
@@ -84,6 +96,7 @@ public sealed partial class GameSession
         }
         TickSpawns(dt);
         TickEnemies(dt);
+        TickBasicAttack();
         CastSkills();
         TickEffects(dt);
         Battle.Enemies.RemoveAll(e => e.Hp <= 0);
@@ -146,10 +159,22 @@ public sealed partial class GameSession
             spawn.Timer -= dt;
             if (spawn.Timer > 0) continue;
             spawn.Timer += wave.Interval; spawn.Wave++;
-            for (int i = 0; i < wave.Count; i++) Spawn(wave.Monster, cell, 40 + i * 100);
-            if (spawn.Wave % wave.EliteEvery == 0) Spawn(wave.Elite, cell, 320);
+            // 混编：一条波次可以配多种怪，序号 i 是跨模板连续的，两种怪不会落在同一个点上。
+            int i = 0;
+            foreach (var unit in Config.WaveUnits[wave.Id])
+                for (int n = 0; n < WaveCount(unit); n++) Spawn(unit.Monster, cell, 40 + i++ * 100);
+            if (spawn.Wave % wave.EliteEvery == 0) Spawn(wave.Elite, cell, 40 + i * 100);
         }
     }
+    /// <summary>
+    /// 波次怪物数量的关卡倍率：随关卡递增，且递增本身在加快（线性一项 + 平方一项，两者都可在 `game_settings` 调）。
+    /// 只放大**数量**、按比例分给各模板，所以"两只小怪带一只肉盾"不会放大成"一堆肉盾"。
+    /// </summary>
+    public double WaveScale => 1 + (Level.Order - 1) * Config.Setting("wave_growth") + Math.Pow(Level.Order - 1, 2) * Config.Setting("wave_accel");
+    /// <summary>这一波这个模板刷几只：基线 × 关卡倍率（四舍五入），再受该模板预设的上限约束。</summary>
+    private int WaveCount(WaveUnitDef unit) =>
+        Math.Min(unit.MaxCount, (int)Math.Round(unit.Count * WaveScale, MidpointRounding.AwayFromZero));
+
     private void Spawn(string monsterId, int cell, double offset)
     {
         var m = Config.Monsters[monsterId];
@@ -164,6 +189,7 @@ public sealed partial class GameSession
         {
             var m = Config.Monsters[e.MonsterId];
             e.SlowUntil = Math.Max(0, e.SlowUntil - dt);
+            e.ChillUntil = Math.Max(0, e.ChillUntil - dt);
             e.StunUntil = Math.Max(0, e.StunUntil - dt);
             e.VulnerableUntil = Math.Max(0, e.VulnerableUntil - dt);
             if (e.StunUntil > 0) continue; // 眩晕：无法移动与攻击
@@ -185,8 +211,20 @@ public sealed partial class GameSession
         }
     }
     private bool Legal(EnemyState e) => e.Hp > 0 && (e.Kind != "rift" || RiftUnlocked);
+    /// <summary>怪物所在层。层从模板推导而不是存进 `EnemyState`：存档格式一个字节都不用改，老存档的 MonsterId 照样能定位。</summary>
+    private bool Flying(EnemyState e) => Config.Monsters[e.MonsterId].Layer == "air";
+    /// <summary>技能定位与敌人所在层的匹配。空 / both 打两者，ground 只打地面，air 只打空中。</summary>
+    private bool LayerHit(string hits, EnemyState e) => hits switch
+    {
+        "ground" => !Flying(e),
+        "air" => Flying(e),
+        _ => true,
+    };
+    /// <summary>能成为这一发的合法目标：目标本身合法，且层数对得上。地面招不会去锁飞行单位。</summary>
+    private bool Legal(EnemyState e, string hits) => Legal(e) && LayerHit(hits, e);
     private bool InRange(EnemyState? e, double range) => e is not null && Math.Abs(e.X - Battle.PlayerX) <= range;
-    private EnemyState? Target(double range) => Battle.Enemies.Where(e => Legal(e) && Math.Abs(e.X - Battle.PlayerX) <= range).OrderBy(e => Math.Abs(e.X - Battle.PlayerX)).FirstOrDefault();
+    /// <summary>最近的合法目标。hits 为空表示不限层（普攻、剑灵弹、召唤弹都走这一档）。</summary>
+    private EnemyState? Target(double range, string hits = "") => Battle.Enemies.Where(e => Legal(e, hits) && Math.Abs(e.X - Battle.PlayerX) <= range).OrderBy(e => Math.Abs(e.X - Battle.PlayerX)).FirstOrDefault();
 
     private void CastSkills()
     {
@@ -195,22 +233,9 @@ public sealed partial class GameSession
         {
             if (rank <= 0 || !Ready(id)) continue;
             var skill = Config.Skills[id];
-            var power = skill.Power * (1 + .15 * (rank - 1) + SkillBonus(id));
-            if (skill.Kind == "buff")
-            {
-                // Buff 以自身为目标，仅在交战时触发，避免无敌人时浪费冷却。
-                if (Target(skill.Range) is null) continue;
-                CastBuff(skill, power);
-            }
-            else if (skill.Secondary == "multi")
-            {
-                // 历史次级效果：当前已无技能使用（原疾风剑专用），退休配置日后可能复活，勿删。
-                var targets = Targets(skill.Range, (int)skill.SecondaryValue);
-                if (targets.Count == 0) continue;
-                for (int i = 0; i < targets.Count; i++) LaunchSkill(skill, targets[i], Attack * power, i);   // 序号照传，暴击缩冷却才不会被多发放大
-            }
-            else if (!CastVolley(skill, Attack * power)) continue;   // 没有合法目标时不空放、也不消耗冷却
-            Battle.Cooldowns[id] = skill.Cooldown;
+            // 真诀（trigger_chance > 0）不在冷却到点时自动释放，改为普攻出手时按概率触发，见 TickBasicAttack。
+            if (skill.TriggerChance > 0) continue;
+            if (Release(skill, SkillPower(skill, rank))) Battle.Cooldowns[id] = skill.Cooldown;   // 没有合法目标时不空放、也不消耗冷却
         }
         foreach (var pet in State.EquippedPets)
         {
@@ -222,6 +247,89 @@ public sealed partial class GameSession
             Battle.Cooldowns[pet] = row.Number("cooldown");
         }
     }
+    /// <summary>剑诀威力：配置基础值 × 技能等级加成 × 剑意加成。普攻不走这里（它用 `fightattr.basic_power`）。</summary>
+    private double SkillPower(SkillDef skill, int rank) => skill.Power * (1 + .15 * (rank - 1) + SkillBonus(skill.Id));
+
+    /// <summary>真的出手一次。返回 false 表示场上没有合法目标、这一手没有放出去，调用方据此决定不写冷却。</summary>
+    private bool Release(SkillDef skill, double power)
+    {
+        if (!LaunchShape(skill, power)) return false;
+        // 施放瞬间的全屏定身。放在这里而不是 Launch 里：Release 已经把 buff / multi / volley 三条释放路径收口，
+        // 一次施法只结算一次；定身先于剑气出手，配置把 hover_time 也配成同长，读起来就是"定住一秒再放剑气"。
+        // 复用 StunUntil，于是"无法移动与攻击"与表现层的眩晕电弧都是现成的，不必另加状态。
+        // 排除裂隙：它本来就不移动、不攻击，定身对它没有意义；而 TickEnemies 只在非裂隙敌人上衰减状态，
+        // 给它挂上 StunUntil 会永远减不掉，表现层会一直画着一圈电弧。
+        if (skill.CastRoot > 0)
+            foreach (var e in Battle.Enemies.Where(e => e.Hp > 0 && e.Kind != "rift"))
+                e.StunUntil = Math.Max(e.StunUntil, skill.CastRoot);
+        return true;
+    }
+
+    /// <summary>按剑诀的形态真正把这一手放出去。返回 false 表示没有合法目标、没有空放。</summary>
+    private bool LaunchShape(SkillDef skill, double power)
+    {
+        if (skill.Kind == "buff")
+        {
+            // Buff 以自身为目标，仅在交战时触发，避免无敌人时浪费冷却。
+            if (Target(skill.Range) is null) return false;
+            CastBuff(skill, power);
+            return true;
+        }
+        if (skill.Secondary == "multi")
+        {
+            // 历史次级效果：当前已无技能使用（原疾风剑专用），退休配置日后可能复活，勿删。
+            var targets = Targets(skill.Range, (int)skill.SecondaryValue);
+            if (targets.Count == 0) return false;
+            for (int i = 0; i < targets.Count; i++) LaunchSkill(skill, targets[i], Attack * power, i);   // 序号照传，暴击缩冷却才不会被多发放大
+            return true;
+        }
+        return CastVolley(skill, Attack * power);
+    }
+
+    /// <summary>
+    /// 无视冷却与触发概率，立刻释放一次指定剑诀。技能预览与自检专用，不参与正常战斗流程。
+    /// 照常写冷却：释放音是靠"冷却 0 → 正"的边沿触发的（见 UI/Audio.cs 的 TrackSkillCasts），
+    /// 这里不写的话真诀在预览里出手了却没有声音，而那时唯一出得了手的就只剩它。
+    /// </summary>
+    internal bool ForceRelease(string id)
+    {
+        if (!Config.Skills.TryGetValue(id, out var skill)) return false;
+        if (!Release(skill, SkillPower(skill, State.Skills.GetValueOrDefault(id)))) return false;
+        Battle.Cooldowns[id] = skill.Cooldown;
+        return true;
+    }
+
+    /// <summary>
+    /// 普通攻击：每 `basic_interval` 秒向最近的合法目标平射一柄飞剑，并在出手的这一刻摇各真诀的触发概率。
+    /// 形态用默认 bolt（Trajectory 为空）——表现层已把它画成肩部高度横飞的剑，正是「平射」；
+    /// Skill 传空串，于是技能名标签、形态参数回退、以及「效果来源必须是已知剑诀」的自检都不受影响。
+    /// 没有合法目标时不空放、也不消耗间隔，与剑诀同口径。
+    /// </summary>
+    private void TickBasicAttack()
+    {
+        if (!BasicAttackEnabled || Battle.PlayerHp <= 0 || !Ready(BasicAttackKey)) return;
+        var target = Target(Config.Attr("basic_range"));
+        if (target is null) return;
+        Battle.Cooldowns[BasicAttackKey] = Config.Attr("basic_interval");
+        Launch("projectile", target, Attack * Config.Attr("basic_power"), 4, skill: "");
+        RollTriggerSkills();
+    }
+
+    /// <summary>
+    /// 真诀触发：普攻出手时，对每个「已习得、当前冷却就绪、且配了触发概率」的剑诀各摇一次。
+    /// 冷却未就绪的不摇——省下一次随机数，也让「冷却就绪才可能触发」这句话成立。
+    /// 冷却对真诀而言是「最短触发间隔」：实际间隔由触发概率主导（5% 每次普攻 ≈ 平均 20 秒一次）。
+    /// </summary>
+    private void RollTriggerSkills()
+    {
+        foreach (var (id, rank) in State.Skills)
+        {
+            if (rank <= 0 || !Ready(id) || !Config.Skills.TryGetValue(id, out var skill) || skill.TriggerChance <= 0) continue;
+            if (_random.NextDouble() >= skill.TriggerChance) continue;
+            if (Release(skill, SkillPower(skill, rank))) Battle.Cooldowns[id] = skill.Cooldown;
+        }
+    }
+
     private bool Ready(string key) => Battle.Cooldowns.GetValueOrDefault(key) <= 0;
     /// <summary>
     /// 弹群编排：数量、落点/排列间距与错时都在这里决定，返回是否真的出手了（false 表示没有合法目标）。
@@ -231,25 +339,42 @@ public sealed partial class GameSession
         int count = skill.Kind == "projectile" ? skill.ProjectileCount : 1;
         if (skill.Trajectory == "sky_drop")
         {
-            // 固定剑阵：阵心取最近的合法敌人，各支按 spread 在阵心两侧铺开，**与敌人数无关**——
+            // 固定剑阵：阵心取选中的合法敌人，各支按 spread 在阵心两侧铺开，**与敌人数无关**——
             // 只有一个敌人时不会缩成一束。落点由 Core 算进 X，因为它直接参与落地判定。
-            var center = Target(skill.Range);
+            var center = Pick(skill);
             if (center is null) return false;
             for (int i = 0; i < count; i++) LaunchSkill(skill, center, damage, i, (i - (count - 1) / 2.0) * skill.Spread);
             return true;
         }
         // 其余形态各自选敌、尽量不重复（敌人不足才循环重复）。
-        var picks = TargetsWithRepeats(skill.Range, count);
+        var picks = Picks(skill, count);
         if (picks.Count == 0) return false;
         for (int i = 0; i < picks.Count; i++) LaunchSkill(skill, picks[i], damage, i);
         return true;
     }
+
+    /// <summary>
+    /// 选敌。默认最近的合法目标（受射程限制），即剑诀一直以来的行为；
+    /// `targeting = highest_hp` 时改为**全场血量最高者、无视射程**（斩鬼神）。
+    /// 同血量按 Id 升序取第一个，自检才有确定结果。
+    /// </summary>
+    private EnemyState? Pick(SkillDef skill) => skill.Targeting == "highest_hp"
+        ? Battle.Enemies.Where(e => Legal(e, skill.Hits)).OrderByDescending(e => e.Hp).ThenBy(e => e.Id).FirstOrDefault()
+        : Target(skill.Range, skill.Hits);
+
+    /// <summary>
+    /// 多发取目标。`highest_hp` 时取血量最高的前 n 个（不重复）；斩鬼神现在只用 1 个，
+    /// 将来要"依次出现多个剑光"时这里天然支持，只需放宽"非 projectile 只能单发"那条校验。
+    /// </summary>
+    private List<EnemyState> Picks(SkillDef skill, int n) => skill.Targeting == "highest_hp"
+        ? Battle.Enemies.Where(e => Legal(e, skill.Hits)).OrderByDescending(e => e.Hp).ThenBy(e => e.Id).Take(n).ToList()
+        : TargetsWithRepeats(skill.Range, n, skill.Hits);
     // ThenBy(Id) 只为同 X 多敌时排序确定：自检常把多个敌人重叠放到同一坐标。
-    private List<EnemyState> Targets(double range, int n) => Battle.Enemies.Where(e => Legal(e) && Math.Abs(e.X - Battle.PlayerX) <= range).OrderBy(e => Math.Abs(e.X - Battle.PlayerX)).ThenBy(e => e.Id).Take(n).ToList();
+    private List<EnemyState> Targets(double range, int n, string hits = "") => Battle.Enemies.Where(e => Legal(e, hits) && Math.Abs(e.X - Battle.PlayerX) <= range).OrderBy(e => Math.Abs(e.X - Battle.PlayerX)).ThenBy(e => e.Id).Take(n).ToList();
     /// <summary>多发弹群选敌：先取最近的 n 个不同敌人（各自选敌、尽量不重复）；敌人不足时才按序循环重复打同一个。</summary>
-    private List<EnemyState> TargetsWithRepeats(double range, int n)
+    private List<EnemyState> TargetsWithRepeats(double range, int n, string hits = "")
     {
-        var distinct = Targets(range, n);
+        var distinct = Targets(range, n, hits);
         if (distinct.Count == 0) return [];
         var picks = new List<EnemyState>(n);
         for (int i = 0; i < n; i++) picks.Add(distinct[i % distinct.Count]);
@@ -281,8 +406,10 @@ public sealed partial class GameSession
         // 候选里排除增益类剑诀：否则暴击会不断给仙风云体术减冷却，它的覆盖率从标称的 6/15=40%
         // 实测涨到 50%+，形成"暴击 → 增益来得更勤 → 出手更快 → 更多暴击"的正反馈。
         // 与"攻速不加速增益类剑诀的冷却"是同一条口径：增益之间的冷却不该互相喂。
+        // 真诀（trigger_chance > 0）同样排除：它们的冷却只是"最短触发间隔"，实际由概率主导，
+        // 缩几秒几乎等于白给，还会稀释这次暴击本该给输出剑诀的收益。
         var cooling = State.Skills.Where(kv => kv.Value > 0 && Battle.Cooldowns.GetValueOrDefault(kv.Key) > 0
-                && Config.Skills.TryGetValue(kv.Key, out var s) && s.Kind != "buff")
+                && Config.Skills.TryGetValue(kv.Key, out var s) && s.Kind != "buff" && s.TriggerChance <= 0)
             .Select(kv => kv.Key).ToArray();
         if (cooling.Length == 0) return;
         string pick = cooling[_random.Next(cooling.Length)];
@@ -300,12 +427,12 @@ public sealed partial class GameSession
         Launch(skill.Kind, target, damage, skill.Duration, true, skill.Secondary, skill.SecondaryValue,
             skill.SecondaryDuration, skill.Secondary == "execute" ? skill.SecondaryValue : 0, skill.AoeRadius, skill.Id,
             skill.Trajectory, index, skill.HoverTime + delay, arc, skill.Speed > 0 ? skill.Speed : 1500, lane, jitter,
-            skill.PierceChance);
+            skill.PierceChance, skill.Knockback, skill.AoeAll, skill.Hits);
     }
     private void Launch(string kind, EnemyState target, double damage, double duration, bool applyModifiers = true,
         string secondary = "", double secondaryValue = 0, double secondaryDuration = 0, double executeThreshold = 0, double aoeRadius = 0, string skill = "",
         string trajectory = "", int index = 0, double hold = 0, double arc = 0, double speed = 1500, double lane = 0, double jitter = 0,
-        double pierceChance = 0)
+        double pierceChance = 0, double knockback = 0, bool aoeAll = false, string layer = "")
     {
         if (applyModifiers && _buffTime > 0) damage *= _buffPower;
         // 暴击判定全游戏只有这一处，逐弹丸各摇一次（召唤弹 applyModifiers=false 不参与）。
@@ -316,7 +443,9 @@ public sealed partial class GameSession
             // "暴击缩短一个随机技能的冷却"按**每次施法**最多触发一次：多发齐射是 3～5 支各摇一次暴击的，
             // 若每支都触发，实际触发密度会放大数倍（实测能把增益冷却吃到覆盖率自涨）。
             // 由该次施法的第一支负责，单发/剑灵弹丸的 index 本就是 0。
-            if (index == 0) CritShortenCooldown();
+            // 普攻（skill 为空）不参与缩冷却：它每秒一次，若也算，醉仙望月步的覆盖率会自涨——
+            // 与"攻速不加速增益类剑诀"是同一条护栏口径：缩冷却只挂在剑诀出手上。
+            if (index == 0 && skill != "") CritShortenCooldown();
         }
         // 生命期分两种：普通弹道沿用硬编码 4 秒——召唤弹传 2、剑灵弹只传 0.5，
         // 若把 duration 当通用寿命会缩短剑灵弹丸、使其飞不到目标；自定义飞行形态才用 duration（本列对该形态即飞行/下坠时长）。
@@ -333,7 +462,8 @@ public sealed partial class GameSession
             Timer = customFlight ? hold : 0,
             Skill = skill, Secondary = secondary, SecondaryValue = secondaryValue, SecondaryDuration = secondaryDuration,
             ExecuteThreshold = executeThreshold, AoeRadius = aoeRadius, Trajectory = trajectory, Index = index, Arc = arc,
-            Speed = speed, Jitter = jitter, PierceChance = pierceChance, Dir = Math.Sign(target.X - Battle.PlayerX) });
+            Speed = speed, Jitter = jitter, PierceChance = pierceChance, Dir = Math.Sign(target.X - Battle.PlayerX),
+            Knockback = knockback, AoeAll = aoeAll, Layer = layer });
     }
     private void TickEffects(double dt)
     {
@@ -347,20 +477,50 @@ public sealed partial class GameSession
                 { HurtPlayer(effect.Damage); effect.Life = 0; }
                 continue;
             }
-            var target = Battle.Enemies.FirstOrDefault(e => e.Id == effect.Target && Legal(e));
+            // 锁定型（target / 追踪弹）在这里取目标：层数对不上就当它不存在，后面各分支自然不结算。
+            var target = Battle.Enemies.FirstOrDefault(e => e.Id == effect.Target && Legal(e, effect.Layer));
             switch (effect.Kind)
             {
                 case "projectile":
                     // 起飞前停留（悬浮蓄势 / 浮现 / 剑阵各支的错时）：所有自定义形态共用同一个倒计时，
                     // 所以 bolt 以外的形态不必各自实现时序。bolt 与退役的 secondary == "pierce" 传 0，行为不变。
-                    if (effect.Timer > 0) break;
+                    if (effect.Timer > 0)
+                    {
+                        // 肩侧/身前发射的形态（平射与平推）在停留期要**跟着施法者走**：这一秒里角色可能还在前进，
+                        // 发射点若冻结在施放那一刻，等它起飞时已经被甩到角色身后——空明虚空剑的前摇有整整 1 秒，
+                        // 表现为"冲击波从画面左边冒出来"。落点类形态（sky_drop）不在此列：它的 X 是阵心，不能跟人走。
+                        if (effect.Trajectory is "line_shot" or "line_pierce") effect.X = Battle.PlayerX;
+                        break;
+                    }
                     // 自定义飞行形态。bolt（Trajectory 为空）不走这里，下面两条旧路径原样保留。
                     if (effect.Trajectory == "sky_drop")
                     {
                         // 垂直落下：X 在发射时已冻结（不追踪，"击中谁是谁"），落地时对落点半径内所有敌人结算，可命中重叠单位。
                         if (effect.Life > 0) break;
                         double radius = effect.AoeRadius; // 校验保证 > 0，绝不回退 ground 的 220
-                        foreach (var e in Battle.Enemies.Where(e => Legal(e) && Math.Abs(e.X - effect.X) < radius).ToArray())
+                        // 天降火海：带 dot 的天降不做一次性结算，改为在落点留下一片火海。
+                        // 火海本身就是一个 ground 效果（寿命 = secondary_duration），于是"每 0.6 秒对半径内全体结算并刷新灼烧"
+                        // 这套现成逻辑原样复用；伤害走 Damage，灼烧是它附在敌人身上的持续伤害。校验保证这里的 duration > 0。
+                        if (effect.Secondary == "dot")
+                        {
+                            double life = effect.SecondaryDuration;
+                            Effects.Add(new()
+                            {
+                                Kind = "ground", X = effect.X, Damage = effect.Damage, Life = life, MaxLife = life,
+                                // Index 非 0：技能名标签只由本次施法的第一支负责，火海是那把剑派生出来的，不该再挂一次名字。
+                                Index = 1, Skill = effect.Skill, Secondary = "dot", SecondaryValue = effect.SecondaryValue,
+                                SecondaryDuration = effect.SecondaryDuration, AoeRadius = radius, Layer = effect.Layer,
+                            });
+                            break;
+                        }
+                        // 全体命中（aoe_all）：无视位置与半径，对这一把剑落地时的所有合法敌人各结算一次。
+                        // radius 在配置里仍要求为正，但此时只作表现层的落点预警圈用。
+                        if (effect.AoeAll)
+                        {
+                            foreach (var e in Battle.Enemies.Where(e => Legal(e, effect.Layer)).ToArray()) Hit(e, effect.Damage, effect);
+                            break;
+                        }
+                        foreach (var e in Battle.Enemies.Where(e => Legal(e, effect.Layer) && Math.Abs(e.X - effect.X) < radius).ToArray())
                             Hit(e, effect.Damage, effect);
                         break;
                     }
@@ -371,7 +531,7 @@ public sealed partial class GameSession
                         double from = effect.X;
                         effect.X += effect.Speed * dt;
                         if (effect.X > Level.Cells * Config.Setting("cell_width")) { effect.Life = 0; break; }
-                        var victim = Battle.Enemies.Where(e => Legal(e) && !effect.Hit.Contains(e.Id) && e.X >= from - 30 && e.X <= effect.X + 30)
+                        var victim = Battle.Enemies.Where(e => Legal(e, effect.Layer) && !effect.Hit.Contains(e.Id) && e.X >= from - 30 && e.X <= effect.X + 30)
                             .OrderBy(e => e.X).ThenBy(e => e.Id).FirstOrDefault();
                         if (victim is null) break;
                         effect.Hit.Add(victim.Id);
@@ -401,7 +561,7 @@ public sealed partial class GameSession
                         double from = effect.X;
                         effect.X += effect.Speed * dt;
                         if (effect.X > Level.Cells * Config.Setting("cell_width")) { effect.Life = 0; break; }
-                        foreach (var e in Battle.Enemies.Where(e => Legal(e) && !effect.Hit.Contains(e.Id) && e.X >= from - 30 && e.X <= effect.X + 30).ToArray())
+                        foreach (var e in Battle.Enemies.Where(e => Legal(e, effect.Layer) && !effect.Hit.Contains(e.Id) && e.X >= from - 30 && e.X <= effect.X + 30).ToArray())
                         { effect.Hit.Add(e.Id); Hit(e, effect.Damage, effect); }
                         break;
                     }
@@ -417,7 +577,7 @@ public sealed partial class GameSession
                     {
                         effect.Timer = .6;
                         double radius = effect.AoeRadius > 0 ? effect.AoeRadius : 220;
-                        foreach (var e in Battle.Enemies.Where(e => Legal(e) && Math.Abs(e.X - effect.X) < radius).ToArray()) Hit(e, effect.Damage, effect);
+                        foreach (var e in Battle.Enemies.Where(e => Legal(e, effect.Layer) && Math.Abs(e.X - effect.X) < radius).ToArray()) Hit(e, effect.Damage, effect);
                     }
                     break;
                 case "summon":
@@ -431,10 +591,17 @@ public sealed partial class GameSession
     // 命中结算：应用斩杀与吸血，再附带次级效果状态；易伤在 HurtEnemy 内统一处理。
     private void Hit(EnemyState e, double damage, CombatEffect fx)
     {
-        if (!Legal(e)) return;
+        // 层数不匹配就直接不结算：这是"飞行单位免疫地面技能"的最后一道防线，
+        // 任何绕过选敌的调用路径（比如 aoe_all 的全场扫描）都在这里被拦住。
+        if (!Legal(e) || !LayerHit(fx.Layer, e)) return;
         if (fx.ExecuteThreshold > 0 && e.Hp / e.MaxHp < fx.ExecuteThreshold) damage *= 2; // 斩杀：低于阈值气血伤害翻倍（暂定）
         HurtEnemy(e, damage);
         if (damage > 0 && _lifestealUntil > 0) Battle.PlayerHp = Math.Min(MaxHp, Battle.PlayerHp + damage * _lifestealFactor); // 吸血
+        // 击退：沿背离玩家的方向推开。死在本次伤害上的敌人不再后退，免得"尸体会滑动"。
+        // 推离战力范围会让角色随即继续前进，正是"剑气推着敌人走"该有的结果，不需要额外处理。
+        // 裂隙不可移动，绝不推它——它的位置是关卡与停步判定的锚点。
+        if (fx.Knockback > 0 && e.Hp > 0 && e.Kind != "rift")
+            e.X += (e.X >= Battle.PlayerX ? 1 : -1) * fx.Knockback;
         ApplySecondary(e, fx);
     }
     private void ApplySecondary(EnemyState e, CombatEffect fx)
@@ -442,6 +609,9 @@ public sealed partial class GameSession
         switch (fx.Secondary)
         {
             case "slow": e.SlowUntil = fx.SecondaryDuration; e.SlowFactor = 1 - fx.SecondaryValue; break;
+            // 寒冷：移速仍走 SlowUntil/SlowFactor（战斗判定只有一条路径），ChillUntil 只是多出来的状态源，
+            // 供表现层把受击角色染成冰蓝。与减速互相覆盖时，谁都可能后写，故两者都按"最后一次命中"为准。
+            case "chill": e.SlowUntil = fx.SecondaryDuration; e.SlowFactor = 1 - fx.SecondaryValue; e.ChillUntil = fx.SecondaryDuration; break;
             case "stun": e.StunUntil = fx.SecondaryDuration; break;
             case "dot": e.DotUntil = fx.SecondaryDuration; e.DotDps = fx.Damage * fx.SecondaryValue; break;
             case "vulnerable": e.VulnerableUntil = fx.SecondaryDuration; e.VulnerableFactor = 1 + fx.SecondaryValue; break;

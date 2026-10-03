@@ -7,7 +7,9 @@ var config = GameConfig.Load(f => source[f]);
 int passed = 0;
 void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
 void Check(string name, Action test) { test(); passed++; Console.WriteLine("PASS " + name); }
-GameSession New() => new(config, seed: 42);
+// 普攻默认关掉：受控用例要的是确定的伤害预算，而普攻每秒都在加伤害、也在消耗随机数。
+// 需要验证真实循环的用例显式传 basic: true。
+GameSession New(bool basic = false) { var g = new GameSession(config, seed: 42) { BasicAttackEnabled = basic }; return g; }
 void Step(GameSession g, double seconds) { for (int i = 0; i < (int)Math.Ceiling(seconds / .05); i++) g.Step(.05); }
 void ToBoss(GameSession g)
 {
@@ -35,7 +37,9 @@ string Cell(string text, string id, string field, string value)
 // 单一剑诀 + 三个高血量靶子：靶子定身摆在 offset 处（不定身的话怪物会朝玩家走，弹道到达时机随之漂移）。
 GameSession SalvoOn(GameConfig cfg, string skillId, double offset = 90)
 {
-    var s = new GameSession(cfg, seed: 42); s.Step(.05);
+    // 靶场一律关掉普攻：否则每秒多出一支飞行效果，既有"数得到几支剑"的断言全会被污染，
+    // 而且普攻还要抽随机数，同 seed 的可复现序列也会跟着漂。
+    var s = new GameSession(cfg, seed: 42) { BasicAttackEnabled = false }; s.Step(.05);
     foreach (var e in s.Battle.Enemies) { e.Atk = 0; e.Hp = e.MaxHp = 1e8; e.X = s.Battle.PlayerX + offset; e.StunUntil = 1e9; }
     s.State.Skills.Clear(); s.State.Skills[skillId] = 1; s.Battle.Cooldowns.Clear(); s.Effects.Clear();
     s.Step(.05);
@@ -51,7 +55,8 @@ Check("CSV BOM, quotes, multiline and write roundtrip", () => {
 });
 Check("reject duplicate IDs and dangling references", () => {
     Reject(() => GameConfig.Load(f => f == "item.csv" ? source[f] + "gold,重复,currency,重复\n" : source[f]));
-    Reject(() => GameConfig.Load(f => f == "wave.csv" ? source[f].Replace("wave_1,slime", "wave_1,missing") : source[f]));
+    // 波次刷什么怪现由子表 wave_unit 决定，悬空引用要在那里拦。
+    Reject(() => GameConfig.Load(f => f == "wave_unit.csv" ? source[f].Replace("wave_1_slime,wave_1,slime", "wave_1_slime,wave_1,missing") : source[f]));
 });
 Check("reject repeat core and non-deterministic first-core quantity", () => {
     Reject(() => GameConfig.Load(f => f == "drop.csv" ? source[f].Replace("boss_repeat,gold,60", "boss_repeat,core,1") : source[f]));
@@ -60,10 +65,10 @@ Check("reject repeat core and non-deterministic first-core quantity", () => {
 Check("reject talent cycles", () => Reject(() => GameConfig.Load(f => f == "TalentLink.csv" ? source[f] + "cycle,t_end,t_root\n" : source[f])));
 Check("reject unknown secondary effect", () => Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_03", "secondary", "bogus") : source[f])));
 Check("reject invalid flight shape, count and arc band", () => {
-    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_02", "trajectory", "warp") : source[f]));
-    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_02", "trajectory", "arc_homing") : source[f]));   // 非 projectile 不得带形态
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_11", "trajectory", "warp") : source[f]));
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_07", "trajectory", "arc_homing") : source[f]));   // 非 projectile 不得带形态
     Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_11", "projectile_count", "0") : source[f]));     // 弹数至少 1
-    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_02", "projectile_count", "3") : source[f]));     // 非 projectile 只能单发
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_07", "projectile_count", "3") : source[f]));     // 非 projectile 只能单发
     Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_11", "arc_min", "200") : source[f]));            // 弧区间倒挂
     Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_11", "arc_max", "400") : source[f]));            // 弧高越出战斗画面
     Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_06", "aoe_radius", "0") : source[f]));           // 天降必须有落点半径
@@ -71,6 +76,22 @@ Check("reject invalid flight shape, count and arc band", () => {
     Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_11", "speed", "10") : source[f]));              // 慢到几乎不动的弹道
     Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_01", "pierce_chance", "1.5") : source[f]));     // 概率不能超过 1
     Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_04", "secondary_extra", "-1") : source[f]));    // 附加参数不能为负
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_02", "trigger_chance", "1.5") : source[f]));     // 触发概率不能超过 1
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_02", "trigger_chance", "-0.1") : source[f]));    // 触发概率不能为负
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_02", "secondary_duration", "0") : source[f]));   // 天降火海需要正的残留时长
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_12", "secondary", "freeze") : source[f]));       // chill 之外的名字仍然被拒
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_05", "targeting", "weakest") : source[f]));      // 未知的选敌方式
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_05", "cast_root", "-1") : source[f]));           // 定身时长不能为负
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_05", "knockback", "-1") : source[f]));           // 击退距离不能为负
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_02", "aoe_all", "1") : source[f]));              // 天降火海与全体命中互斥
+    Reject(() => GameConfig.Load(f => f == "monster.csv" ? Cell(source[f], "slime", "layer", "sky") : source[f]));                    // 未知层级
+    Reject(() => GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_03", "hits", "sky") : source[f]));               // 未知技能定位
+    Reject(() => GameConfig.Load(f => f == "wave_unit.csv" ? Cell(source[f], "wave_3_hawk", "wave_id", "wave_9") : source[f]));       // 悬空波次引用
+    Reject(() => GameConfig.Load(f => f == "wave_unit.csv" ? Cell(source[f], "wave_1_slime", "max_count", "1") : source[f]));         // 数量上限低于基线
+    // 某一波没有任何 wave_unit：那一波会刷不出怪、关卡直接空转，必须在加载期被拒。
+    Reject(() => GameConfig.Load(f => f == "wave_unit.csv"
+        ? Cell(Cell(Cell(source[f], "wave_3_bat", "wave_id", "wave_1"), "wave_3_hawk", "wave_id", "wave_1"), "wave_3_slime", "wave_id", "wave_1")
+        : source[f]));
 });
 Check("only current cell activates; uncleared waves accumulate", () => {
     var g = New(); g.Step(.05);
@@ -89,6 +110,29 @@ Check("passing stops spawn without removing existing enemies", () => {
     foreach (var e in g.Battle.Enemies) e.X = 3000;
     g.Battle.Spawns[0].Timer = .01; g.Step(.05);
     Assert(g.Battle.Spawns[0].Passed && g.Battle.Enemies.Count == 3, "pass lifecycle");
+});
+Check("waves mix several monster templates, spread across distinct spawn points", () => {
+    var g = New(); g.Step(.05);
+    Assert(config.WaveUnits["wave_1"].Count == 2, "wave_1 is configured from two templates");
+    Assert(g.Battle.Enemies.Count == 3, $"the wave still spawns three units in total: {g.Battle.Enemies.Count}");
+    var kinds = g.Battle.Enemies.Select(e => e.MonsterId).OrderBy(id => id).ToArray();
+    Assert(kinds.SequenceEqual(["slime", "slime", "tank"]), "the mix matches the table: " + string.Join(",", kinds));
+    Assert(g.Battle.Enemies.Select(e => e.X).Distinct().Count() == 3, "no two units share a spawn point");
+});
+Check("wave size grows with the stage and stops at the per-template ceiling", () => {
+    int Ceiling() => config.Rows("wave_unit")
+        .Where(u => u.Text("wave_id") == config.Levels.Single(l => l.Id == "level_100").Wave).Sum(u => u.Int("max_count"));
+    var late = New();
+    late.State.UnlockedLevels.Add("level_100"); late.SelectLevel("level_100");
+    late.Step(.05);
+    Assert(late.Battle.Enemies.Count > 3, $"a late stage spawns more than the 3-unit baseline: {late.Battle.Enemies.Count}");
+    Assert(late.Battle.Enemies.Count <= Ceiling(), $"and never past the ceiling: {late.Battle.Enemies.Count} vs {Ceiling()}");
+    // 把倍率拉到很大，数量照样止步在 max_count 之和——上限是硬约束，不是"大致如此"。
+    var huge = GameConfig.Load(f => f == "game_settings.csv" ? Cell(source[f], "wave_growth", "value", "9") : source[f]);
+    var capped = new GameSession(huge, seed: 42) { BasicAttackEnabled = false };
+    capped.State.UnlockedLevels.Add("level_100"); capped.SelectLevel("level_100");
+    capped.Step(.05);
+    Assert(capped.Battle.Enemies.Count == Ceiling(), $"the ceiling holds: {capped.Battle.Enemies.Count} vs {Ceiling()}");
 });
 Check("in-range targets stop movement", () => {
     var g = New(); g.Step(.05); g.Battle.Enemies[0].X = g.Battle.PlayerX + 300;
@@ -164,11 +208,17 @@ Check("talent visibility, atomic costs and finite core spending", () => {
     g.State.Wallet["gold"] = 1000; Assert(g.BuyTalent("t_root") && g.TalentVisible("t_hp"), "adjacent");
     g.BuyTalent("t_hp"); double gold = g.State.Amount("gold"); Assert(!g.BuyTalent("t_auto") && g.State.Amount("gold") == gold, "atomic cost");
 });
-Check("all five effect types execute without invalid targets", () => {
+Check("all live effect types execute without invalid targets", () => {
     var g = New(); foreach (var realm in config.Rows("SwordLevel")) g.State.Realms.Add(realm.Text("id"));
     foreach (var id in config.Skills.Keys) g.State.Skills[id] = 1;
     g.Step(.05); foreach (var e in g.Battle.Enemies) { e.Hp = e.MaxHp = 1e8; e.Atk = 0; e.X = g.Battle.PlayerX + 200; }
-    Step(g, .1); Assert(g.Effects.Any(e => e.Kind == "ground") && g.Effects.Any(e => e.Kind == "summon") && g.Effects.Any(e => e.Kind == "target"), "effect kinds");
+    // 三个真诀只由普攻概率触发，不会在冷却到点自动释放；这里显式各放一次，保证四种在役 kind 都能被看到。
+    foreach (var id in config.Skills.Keys.Where(id => config.Skills[id].TriggerChance > 0))
+        Assert(g.ForceRelease(id), "trigger skill released: " + id);
+    g.Step(.05);
+    // 在役剑诀只剩 projectile / ground / target / buff 四种（buff 不产生 CombatEffect）。
+    // summon 随化神档三个召唤技能一起退役，覆盖搬到了"退休路径"那条用例里（用内存改配置造一个召唤剑诀）。
+    Assert(g.Effects.Any(e => e.Kind == "projectile") && g.Effects.Any(e => e.Kind == "ground") && g.Effects.Any(e => e.Kind == "target"), "effect kinds");
     Step(g, 15); Assert(g.Battle.Enemies.Any(e => e.Hp < e.MaxHp), "effects damage");
 });
 Check("secondary: vulnerable amplifies, stun freezes, slow halves, dot ticks", () => {
@@ -270,8 +320,9 @@ Check("line_shot pierces only on the first hit, and only when the chance allows"
     for (int i = 0; i < 12 && !blade.Pierced; i++) g.Step(.05);
     Assert(blade.Pierced, "the first hit marked the blade as already pierced, so it can never pierce again");
 });
-Check("line_pierce stays available for future skills", () => {
-    // 恒穿透形态已无在役技能使用（御剑术改用 line_shot），退休配置日后可能复活，故用改过的配置保住覆盖。
+Check("line_pierce sweeps every enemy along the line", () => {
+    // 恒穿透形态现在由空明虚空剑与剑气流云壁使用；这里仍用改过的配置单独跑一遍，作为形态自身的对照
+    // （两个在役技能各自还叠了击退与寒冷，混在一起就看不清形态本身的行为）。
     var sweeping = GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(Cell(source[f], "skill_01", "trajectory", "line_pierce"), "skill_01", "projectile_count", "1") : source[f]);
     var g = SalvoOn(sweeping, "skill_01", 200);
     var line = g.Battle.Enemies.ToArray();
@@ -279,6 +330,196 @@ Check("line_pierce stays available for future skills", () => {
     g.Effects.Clear(); g.Battle.Cooldowns.Clear(); g.Step(.05);
     Step(g, .5);
     Assert(line.All(e => e.Hp < e.MaxHp), "an always-piercing blade sweeps through every enemy along the line");
+});
+Check("basic attack fires one flat shot per interval, and stays silent without a legal target", () => {
+    // 关掉暴击：普攻伤害要能被精确断言，暴击会把数字乘 1.5，抽签结果还随 seed 漂。
+    var plain = GameConfig.Load(f => f == "fightattr.csv" ? Cell(source[f], "crit", "base_value", "0") : source[f]);
+    var g = new GameSession(plain, seed: 42) { BasicAttackEnabled = true };
+    g.State.Skills.Clear(); g.Battle.Cooldowns.Clear();
+    g.Step(.05);
+    // 初始波在普攻射程 950 之外：不空放，也不写下间隔。
+    Assert(g.Effects.Count == 0 && !g.Battle.Cooldowns.ContainsKey(GameSession.BasicAttackKey), "out of range means no basic attack");
+    var target = g.Battle.Enemies[0];
+    foreach (var e in g.Battle.Enemies.Skip(1).ToArray()) g.Battle.Enemies.Remove(e);
+    target.X = g.Battle.PlayerX + 500; target.Hp = target.MaxHp = 1e6;
+    target.Atk = 0; target.AttackTimer = 999; target.StunUntil = 1e9;
+    g.Step(.05);
+    var shot = g.Effects.Single(e => e.Skill == "");
+    Assert(shot.Kind == "projectile" && Math.Abs(shot.Damage - g.Attack * plain.Attr("basic_power")) < 1e-9,
+        $"the shot carries attack x basic_power: {shot.Damage}");
+    Assert(Math.Abs(g.Battle.Cooldowns[GameSession.BasicAttackKey] - plain.Attr("basic_interval")) < 1e-9, "the interval starts ticking");
+    Step(g, 1);
+    Assert(target.Hp < target.MaxHp, "the shot lands on the target");
+    // 节奏：冷却从 0 起跑 2.55 秒正好三手（0.05 / 1.05 / 2.05），间隔由配置决定。
+    g.Battle.Cooldowns[GameSession.BasicAttackKey] = 0;
+    int fired = 0; double previous = 0;
+    for (int i = 0; i < 51; i++)
+    {
+        g.Step(.05);
+        double now = g.Battle.Cooldowns.GetValueOrDefault(GameSession.BasicAttackKey);
+        if (now > previous + .5) fired++;   // 间隔被顶回满值 = 出了一手
+        previous = now;
+    }
+    Assert(fired == 3, $"one shot per configured interval: {fired} in 2.55s");
+});
+Check("trigger skills never auto-cast, only fire on a basic attack, and stay gated by cooldown", () => {
+    // 御雷真诀（触发概率 4%）：靶场关了普攻，冷却到点也绝不会自己放出来。
+    var idle = Salvo("skill_07");
+    Step(idle, 30);
+    Assert(!idle.Effects.Any(e => e.Skill == "skill_07"), "a trigger skill never auto-casts on cooldown");
+    // 概率拉到 1：出手的普攻必定带出这一手。
+    var certain = GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_07", "trigger_chance", "1") : source[f]);
+    // 靶子放远（>99）：贴脸摆的话普攻飞剑会在同一个 Step 内就命中并被移除，看不到它还留在场上。
+    var g = SalvoOn(certain, "skill_07", 200); g.BasicAttackEnabled = true;
+    g.Battle.Cooldowns.Clear(); g.Effects.Clear();
+    g.Step(.05);
+    Assert(g.Effects.Any(e => e.Kind == "target" && e.Skill == "skill_07"), "the basic attack is what pulls the trigger");
+    // 冷却仍是硬门槛：把它顶满，概率再高也不出手（同时验证这一手普攻确实出去了，不是空断言）。
+    g.Effects.Clear(); g.Battle.Cooldowns["skill_07"] = 30; g.Battle.Cooldowns[GameSession.BasicAttackKey] = 0;
+    g.Step(.05);
+    Assert(g.Effects.Any(e => e.Skill == ""), "the basic attack itself still happens");
+    Assert(!g.Effects.Any(e => e.Skill == "skill_07"), "a cooling trigger skill cannot fire");
+});
+Check("焚天剑诀 lands a flame sword that leaves a lingering fire sea refreshing the burn", () => {
+    var g = Salvo("skill_02", 90);                  // 三个靶子重叠在阵心
+    Assert(g.ForceRelease("skill_02"), "the flame sword is released");
+    var blade = g.Effects.Single(e => e.Trajectory == "sky_drop");
+    Assert(blade.Secondary == "dot" && Math.Abs(blade.AoeRadius - 120) < 1e-9, "the sword carries dot and the landing radius");
+    Assert(!g.Effects.Any(e => e.Kind == "ground"), "the sea does not exist before the sword lands");
+    Step(g, .8);                                    // 停留 0.25s + 下落 0.5s
+    var sea = g.Effects.SingleOrDefault(e => e.Kind == "ground" && e.Skill == "skill_02");
+    Assert(sea is not null, "landing leaves a fire sea");
+    Assert(Math.Abs(sea!.MaxLife - 3) < 1e-9, $"the sea burns for the configured duration: {sea.MaxLife}");
+    Assert(Math.Abs(sea.AoeRadius - 120) < 1e-9, "the sea keeps the landing radius");
+    Step(g, .1);                                    // 火海下一步才第一次结算
+    Assert(g.Battle.Enemies.All(e => e.DotUntil > 0), "everything inside the sea is set alight");
+    double hp = g.Battle.Enemies[0].Hp;
+    Step(g, 1);
+    Assert(g.Battle.Enemies[0].Hp < hp && g.Battle.Enemies[0].DotUntil > 2.5, "the sea keeps damaging and refreshing the burn");
+    Step(g, 3);
+    Assert(!g.Effects.Any(e => e.Kind == "ground" && e.Skill == "skill_02"), "the sea burns out after its duration");
+});
+Check("剑气流云壁 pushes a tornado forward, hitting everything and chilling it", () => {
+    var g = Salvo("skill_12", 200);                 // 剑气流云壁：line_pierce + chill
+    Assert(g.ForceRelease("skill_12"), "the tornado is released");
+    var tornado = g.Effects.Single();
+    Assert(tornado.Trajectory == "line_pierce" && tornado.Speed == 420 && Math.Abs(tornado.Life - 3) < 1e-9,
+        $"speed and duration come from config: spd={tornado.Speed} life={tornado.Life}");
+    Step(g, 1);
+    Assert(g.Battle.Enemies.All(e => e.Hp < e.MaxHp), "everything along the path is struck");
+    var e0 = g.Battle.Enemies[0];
+    Assert(e0.ChillUntil > 0 && Math.Abs(e0.SlowFactor - .75) < 1e-9, $"chill slows by 25%: {e0.SlowFactor}");
+    Assert(e0.SlowUntil > 0, "chill drives the shared movement slow");
+    Assert(g.Effects.Any(x => x.Skill == "skill_12"), "the tornado is still travelling");
+    Step(g, 3);
+    Assert(!g.Effects.Any(x => x.Skill == "skill_12"), "the tornado dies once its configured duration runs out");
+    // 再次命中是刷新而不是叠加。
+    e0.ChillUntil = .1; e0.SlowUntil = .1;
+    g.Effects.Clear(); g.Battle.Cooldowns.Clear();
+    Assert(g.ForceRelease("skill_12"), "second release");
+    Step(g, 1);
+    Assert(e0.ChillUntil > 4, $"a second hit refreshes the chill: {e0.ChillUntil}");
+});
+Check("空明虚空剑 roots the whole field at cast, then a ground wave shoves each enemy exactly once", () => {
+    // 定身：射程 950 之外的敌人也要被定住——"全屏"不看射程。
+    var rooted = Salvo("skill_05", 200);
+    var line = rooted.Battle.Enemies.ToArray();
+    for (int i = 0; i < line.Length; i++) { line[i].X = rooted.Battle.PlayerX + 200 + i * 900; line[i].StunUntil = 0; }
+    rooted.Effects.Clear(); rooted.Battle.Cooldowns.Clear();
+    Assert(rooted.ForceRelease("skill_05"), "the wave is released");
+    Assert(line.All(e => Math.Abs(e.StunUntil - 1) < 1e-9), "every enemy is rooted at cast, range ignored");
+    var wave = rooted.Effects.Single(e => e.Skill == "skill_05");
+    Assert(wave.Timer > 0 && wave.X == rooted.Battle.PlayerX, "the wave waits out its wind-up at the caster");
+    Step(rooted, .4);                                   // 前摇只有 0.5 秒：这里还在里面
+    Assert(wave.X == rooted.Battle.PlayerX, "still winding up before it launches");
+    // 前摇期间角色还在前进：发射点必须跟着人走。冻结在施放那一刻的话，起飞时剑气已经被甩到身后，
+    // 表现为"冲击波从画面左边冒出来"——这条是那个 bug 的回归护栏。
+    rooted.Battle.PlayerX += 200;
+    Step(rooted, .05);
+    Assert(wave.X == rooted.Battle.PlayerX, "the launch point follows the caster during the wind-up");
+    Step(rooted, .3);                                   // 前摇 0.5 秒走完，剑气开始推进
+    Assert(wave.X > rooted.Battle.PlayerX, "the wave is on its way once the wind-up ends");
+    // 击退：靶子被定死（不还手、不移动），位置变化只可能来自剑气。
+    var pushed = Salvo("skill_05", 200);
+    foreach (var e in pushed.Battle.Enemies) e.X = pushed.Battle.PlayerX + 600;
+    var victim = pushed.Battle.Enemies[0];
+    pushed.Effects.Clear(); pushed.Battle.Cooldowns.Clear();
+    Assert(pushed.ForceRelease("skill_05"), "second release");
+    double x0 = victim.X, hp0 = victim.Hp;
+    Step(pushed, 2.5);                                  // 0.5s 前摇 + 600/700 ≈ 0.86s 推进
+    Assert(victim.Hp < hp0, "the wave damaged it");
+    // 正好推开一个 knockback 的距离：多挨一次就会是两倍，这一条同时证明了"每个敌人只算一次"。
+    Assert(Math.Abs(victim.X - (x0 + 160)) < 1e-9, $"pushed exactly once: {x0} -> {victim.X}");
+    Step(pushed, 3.5);                                  // duration 4 + 前摇 0.5 = 寿命 4.5 秒
+    Assert(!pushed.Effects.Any(e => e.Skill == "skill_05"), "the wave dies after its configured duration");
+});
+Check("斩鬼神 strikes the field's healthiest enemy however far away, and only after the wind-up", () => {
+    var g = Salvo("skill_10", 200);
+    var line = g.Battle.Enemies.ToArray();
+    foreach (var e in line) { e.X = g.Battle.PlayerX + 200; e.Hp = e.MaxHp = 1e6; }
+    var near = line[0]; near.Hp = near.MaxHp = 1e3;               // 身前残血
+    var far = line[1]; far.X = g.Battle.PlayerX + 4000; far.Hp = far.MaxHp = 1e9;   // 射程外满血
+    g.Battle.Enemies.Remove(line[2]);
+    g.Effects.Clear(); g.Battle.Cooldowns.Clear();
+    Assert(g.ForceRelease("skill_10"), "the strike is released");
+    var strike = g.Effects.Single(e => e.Skill == "skill_10");
+    Assert(strike.Target == far.Id, "the healthiest enemy is picked, range ignored");
+    Assert(far.Hp == far.MaxHp && near.Hp == near.MaxHp, "nothing has landed yet — the sword is still winding up");
+    Step(g, 1);                                                    // duration 0.9s
+    Assert(far.Hp < far.MaxHp, "the chosen enemy was struck");
+    Assert(near.Hp == near.MaxHp, "and the one in front was left alone");
+});
+Check("诛仙剑阵 drops four swords in sequence, each one striking every enemy on the field", () => {
+    var g = Salvo("skill_15", 400);
+    var line = g.Battle.Enemies.ToArray();
+    // 一个在身前、一个在身后、一个远到任何落点半径都够不着：aoe_all 必须三个全打。
+    line[0].X = g.Battle.PlayerX + 400;
+    line[1].X = g.Battle.PlayerX - 500;
+    line[2].X = g.Battle.PlayerX + 9000;
+    g.Effects.Clear(); g.Battle.Cooldowns.Clear();
+    Assert(g.ForceRelease("skill_15"), "the array is released");
+    var swords = g.Effects.Where(e => e.Trajectory == "sky_drop").ToArray();
+    Assert(swords.Length == 4, $"four swords: {swords.Length}");
+    Assert(swords.Select(s => s.X).Distinct().Count() == 4, "four distinct landing points: " + string.Join(",", swords.Select(s => s.X)));
+    // 四柄同时浮现、同时落地（volley_interval 为 0）：同一批的起飞前停留必须完全一致。
+    // 初始高度的差别是表现层的事（SkyDropTop 分层 + spawn_jitter），Core 不参与。
+    Assert(swords.Select(s => s.Timer).Distinct().Count() == 1, "the swords appear and land together: " + string.Join(",", swords.Select(s => s.Timer)));
+    Assert(swords.All(s => s.AoeAll), "the array is configured to strike the whole field");
+    Step(g, 2);                                                    // 浮现停顿 1 + 下落 0.5，四柄同时
+    Assert(line.All(e => e.Hp < e.MaxHp), "every enemy was struck, wherever it stands");
+});
+Check("ground-only skills cannot touch flying monsters, while everything else still reaches them", () => {
+    var g = New(); g.Step(.05);
+    g.State.Skills.Clear(); g.Battle.Enemies.Clear();
+    EnemyState Add(string monster, double x)
+    {
+        var e = new EnemyState { Id = g.Battle.NextEnemyId++, MonsterId = monster, Kind = "normal", X = x, Hp = 1e6, MaxHp = 1e6, Atk = 0, AttackTimer = 999, StunUntil = 1e9 };
+        g.Battle.Enemies.Add(e); return e;
+    }
+    var ground = Add("slime", g.Battle.PlayerX + 200);
+    var flyer = Add("bat", g.Battle.PlayerX + 260);   // 就在地面靶旁边：没有层判定的话它一定会被波及
+    // 青莲剑阵定位是 ground：地面靶掉血，空中靶毫发无损。
+    g.State.Skills["skill_03"] = 1; g.Battle.Cooldowns.Clear(); g.Effects.Clear();
+    g.Step(.05);
+    Step(g, 1);
+    Assert(ground.Hp < ground.MaxHp, "the ground target was struck");
+    Assert(flyer.Hp == flyer.MaxHp, $"the flying target was left alone: {flyer.Hp}");
+    // 不限层的技能（御剑术 / 普攻）照样打得到它——这是"只练地面招也不会卡死"的护栏。
+    g.Battle.Enemies.Remove(ground);
+    g.State.Skills.Clear(); g.State.Skills["skill_01"] = 1; g.Battle.Cooldowns.Clear();
+    flyer.Hp = flyer.MaxHp; flyer.X = g.Battle.PlayerX + 300;
+    Step(g, 3);
+    Assert(flyer.Hp < flyer.MaxHp, "a layer-agnostic skill still reaches the flyer");
+});
+Check("a skill aimed only at the air never picks a ground target", () => {
+    // hits = air 目前没有在役技能，用改过的配置保住这条路径的覆盖（与 pierce / hover_homing 同一做法）。
+    var airOnly = GameConfig.Load(f => f == "SwordSkill.csv" ? Cell(source[f], "skill_03", "hits", "air") : source[f]);
+    var g = SalvoOn(airOnly, "skill_03", 200);         // 靶子全是青苔妖（地面）
+    g.Effects.Clear(); g.Battle.Cooldowns.Clear();
+    Step(g, 2);
+    Assert(g.Battle.Enemies.All(e => e.Hp == e.MaxHp), "an air-only skill left the ground targets alone");
+    Assert(g.Effects.Count == 0, "and it never even placed its field");
+    Assert(g.Battle.Cooldowns.GetValueOrDefault("skill_03") == 0, "no legal target means no cooldown consumed");
 });
 Check("haste speeds up attack cooldowns but never buff cooldowns", () => {
     // 攻速若连增益类剑诀一起加速，仙风云体术（15s 冷却 / 6s 持续）会在持续期内转好，变成 100% 常驻。
@@ -327,17 +568,17 @@ Check("a crit shortens one cooling skill's cooldown", () => {
     {
         var s = Salvo("skill_01", 200);
         s.Battle.Enemies[0].Hp = s.Battle.Enemies[0].MaxHp = 1e9;
-        s.State.Skills["skill_02"] = 1;                       // sink：习得但冷却很长，不会出手
+        s.State.Skills["skill_06"] = 1;                       // sink：习得但冷却很长，不会出手
         if (withBuff) s.State.Skills["skill_09"] = 1;         // 醉仙望月步
         s.Battle.Cooldowns.Clear();
-        s.Battle.Cooldowns["skill_02"] = 30;
+        s.Battle.Cooldowns["skill_06"] = 30;
         s.Battle.Cooldowns["skill_09"] = 0;
         // 窗口要够长：缩冷却改成"每次施法最多一次"之后，触发密度降到 1/3（御剑术一轮 3 支只由第一支触发），
         // 3 秒里等不到暴击就会变成假失败。10 秒足够，增益自身 6 秒持续也会在这段时间里覆盖大部分。
         Step(s, 10);
         return s;
     }
-    double with = Run(true).Battle.Cooldowns["skill_02"], without = Run(false).Battle.Cooldowns["skill_02"];
+    double with = Run(true).Battle.Cooldowns["skill_06"], without = Run(false).Battle.Cooldowns["skill_06"];
     Assert(with < without, $"crits shortened a cooling skill: {without:0.##} -> {with:0.##}");
 });
 Check("crits never shorten buff cooldowns, and only fire once per cast", () => {
@@ -385,8 +626,14 @@ Check("homing blade flies out its remaining life when the target dies mid-flight
 Check("summon and pet bolts keep the default speed", () => {
     // speed 列只作用于剑诀：召唤弹与宠物弹走同一条默认路径，不能连带被配置改动（回归护栏）。
     Assert(new CombatEffect().Speed == 1500, "default bullet speed is unchanged");
+    // summon 已无在役技能（化神档三个召唤随本轮替换退役），用内存改配置把一个剑诀改回召唤，保住这条护栏。
+    // 改 kind 必须同时清掉天降形态并把弹数压回 1，否则过不了校验。
+    var summoning = GameConfig.Load(f => f == "SwordSkill.csv"
+        ? Cell(Cell(Cell(Cell(source[f], "skill_06", "kind", "summon"), "skill_06", "trajectory", ""),
+            "skill_06", "projectile_count", "1"), "skill_06", "duration", "7")
+        : source[f]);
     // 靶子必须放远：召唤物的锚点在玩家身前 110，贴脸摆的话弹丸生成时就已经贴着目标、同一步内命中并被移除。
-    var g = Salvo("skill_05", 900);                 // 唤剑影：召唤物每秒发射一枚弹丸（索敌距离 1100）
+    var g = SalvoOn(summoning, "skill_06", 900);    // 召唤物每秒发射一枚弹丸（索敌距离 1100）
     Step(g, 2.2);
     var bolt = g.Effects.FirstOrDefault(e => e.Kind == "projectile");
     Assert(bolt is not null && bolt.Speed == 1500,
@@ -394,10 +641,17 @@ Check("summon and pet bolts keep the default speed", () => {
 });
 Check("retired pierce / multi paths stay covered by config-driven effects", () => {
     // 两个次级效果已无在役技能使用（原御气飞剑/疾风剑），退休配置日后可能复活，故用改过的配置保住覆盖。
+    // skill_02 现在是带天降形态与触发概率的真诀，要把它改成"普通的多发弹"必须一并清掉这两项，
+    // 否则它既不会自动释放、也不会从玩家身前飞出，这条用例就变成空断言。
     var multi = GameConfig.Load(f => f == "SwordSkill.csv"
-        ? Cell(Cell(Cell(source[f], "skill_02", "kind", "projectile"), "skill_02", "secondary", "multi"), "skill_02", "secondary_value", "3")
+        ? Cell(Cell(Cell(Cell(Cell(source[f],
+            "skill_02", "kind", "projectile"),
+            "skill_02", "secondary", "multi"),
+            "skill_02", "secondary_value", "3"),
+            "skill_02", "trajectory", ""),
+            "skill_02", "trigger_chance", "0")
         : source[f]);
-    var g = new GameSession(multi, seed: 42); g.Step(.05);
+    var g = new GameSession(multi, seed: 42) { BasicAttackEnabled = false }; g.Step(.05);
     // 靶子放远并定身：贴脸摆的话多发弹丸会在同一个 Step 内命中并被移除，数不到编排。
     foreach (var e in g.Battle.Enemies) { e.Atk = 0; e.Hp = e.MaxHp = 1e8; e.X = g.Battle.PlayerX + 160; e.StunUntil = 1e9; }
     g.State.Skills.Clear(); g.State.Skills["skill_02"] = 1; g.Battle.Cooldowns.Clear(); g.Effects.Clear();
@@ -455,14 +709,20 @@ Check("legacy save with untracked GM cores is adopted instead of rejected", () =
     store.Save(state); Assert(store.Load(config)!.Amount("core") == 500 && store.Warning is null, "stable after adoption");
 });
 Check("effects carry their source skill so the view can tell the 15 skills apart", () => {
-    var g = New(); foreach (var realm in config.Rows("SwordLevel")) g.State.Realms.Add(realm.Text("id"));
-    foreach (var id in config.Skills.Keys) g.State.Skills[id] = 1;
+    // 三个真诀只由普攻概率触发：用触发概率为 1 的改过配置跑，让"非增益剑诀一律留痕"这条断言是确定的，
+    // 不必依赖 5%/4%/1% 在有限步数里摇中。
+    var certain = GameConfig.Load(f => f == "SwordSkill.csv"
+        ? Cell(Cell(Cell(source[f], "skill_02", "trigger_chance", "1"), "skill_07", "trigger_chance", "1"), "skill_12", "trigger_chance", "1")
+        : source[f]);
+    var g = new GameSession(certain, seed: 42) { BasicAttackEnabled = true };
+    foreach (var realm in config.Rows("SwordLevel")) g.State.Realms.Add(realm.Text("id"));
+    foreach (var id in certain.Skills.Keys) g.State.Skills[id] = 1;
     g.Step(.05); foreach (var e in g.Battle.Enemies) { e.Hp = e.MaxHp = 1e8; e.Atk = 0; }
     var fired = new HashSet<string>();
     for (int i = 0; i < 400; i++) { g.Step(.05); foreach (var effect in g.Effects) if (effect.Skill != "") fired.Add(effect.Skill); }
-    // 3 个 buff 技能不产生飞行/地面效果，其余 12 个应在 20 秒内各自出手并带上来源标记。
-    Assert(fired.Count >= 10, $"distinct skills fired: {string.Join(",", fired.Order())}");
-    Assert(fired.All(config.Skills.ContainsKey), "skill ids resolve to SwordSkill rows");
+    // 3 个 buff 技能不产生飞行/地面效果（普攻的 Skill 为空，也在这里被排除），其余 12 个都该带着来源标记出手。
+    Assert(fired.Count >= 12, $"distinct skills fired: {string.Join(",", fired.Order())}");
+    Assert(fired.All(certain.Skills.ContainsKey), "skill ids resolve to SwordSkill rows");
     Assert(g.Effects.All(e => e.MaxLife > 0), "max life present for fading");
 });
 Check("three pet slots and unique buff categories", () => {
@@ -482,7 +742,7 @@ Check("atomic save, reload without offline gains, and corrupt-primary backup rec
 Check("base character can reach boss and obtain first core in a sustained run", () => {
     // 升级御剑术（初始技能，属默认已解锁的境界）。以前写死 skill_02，而它已随技能书序重排离开
     // 默认境界，UpgradeSkill 会因为境界未解锁而失败——用初始技能即可，也不必再跟着境界表改。
-    var g = New(); g.BuyTalent("t_root"); g.UpgradeSkill("skill_01");
+    var g = New(basic: true); g.BuyTalent("t_root"); g.UpgradeSkill("skill_01");
     for (int i = 0; i < 24000 && g.State.FirstKills.Count == 0; i++) g.Step(.05);
     Assert(g.State.FirstKills.Count > 0, $"stalled at {g.Battle.Cell + 1} hp={g.Battle.PlayerHp}");
 });

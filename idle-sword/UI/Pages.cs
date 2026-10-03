@@ -70,7 +70,10 @@ public partial class Main
             {
                 float y = 64 + j++ * 78; string sid = skill.Id;
                 var label = UiKit.Label(_page, "", x + 18, y, 320, 27, 20);
-                _bindings.Add(() => label.Text = $"{skill.Name}  Lv.{_game.State.Skills.GetValueOrDefault(sid)}   CD {_game.Battle.Cooldowns.GetValueOrDefault(sid):0.0}s");
+                // 真诀不靠冷却出手，显示 "CD 5.0s" 会让人以为它每 5 秒放一次——那 5 秒只是最短触发间隔。
+                _bindings.Add(() => label.Text = skill.TriggerChance > 0
+                    ? $"{skill.Name}  Lv.{_game.State.Skills.GetValueOrDefault(sid)}   普攻触发 {skill.TriggerChance:P0}"
+                    : $"{skill.Name}  Lv.{_game.State.Skills.GetValueOrDefault(sid)}   CD {_game.Battle.Cooldowns.GetValueOrDefault(sid):0.0}s");
                 var button = UiKit.Button(_page, "", x + 18, y + 31, 320, 36, () => Act(() => _game.UpgradeSkill(sid)));
                 _bindings.Add(() => button.Text = $"{(_game.State.Skills.GetValueOrDefault(sid) > 0 ? "强化" : "习得")} · {UiKit.Number(_game.SkillCost(sid))} 灵钱");
                 button.Disabled = !unlocked;

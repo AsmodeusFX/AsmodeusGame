@@ -60,6 +60,9 @@ public sealed class EnemyState
     // 次级效果状态：Until 为剩余秒数，0 表示未生效；Factor 为生效期间的乘数。
     public double SlowUntil { get; set; }
     public double SlowFactor { get; set; } = 1;
+    // 寒冷：减速之外多一个状态源，仅用于表现层把受击角色染成冰蓝。
+    // 移速仍由 SlowUntil/SlowFactor 决定（chill 会同时置位那两个字段），所以战斗判定只有一条路径。
+    public double ChillUntil { get; set; }
     public double StunUntil { get; set; }
     public double DotUntil { get; set; }
     public double DotDps { get; set; }
@@ -88,6 +91,12 @@ public sealed class CombatEffect
     public double SecondaryDuration { get; init; }
     public double ExecuteThreshold { get; init; }
     public double AoeRadius { get; init; }
+    // 命中时把目标沿背离玩家的方向推开的逻辑距离；0 表示不击退。
+    public double Knockback { get; init; }
+    // 落点/范围结算改为命中全体合法敌人（aoe_radius 退为表现层的落点预警圈）。
+    public bool AoeAll { get; init; }
+    // 这一发能打到哪一层（空 = both）。与 monster.layer 配对，飞行单位免疫 ground 定位的效果。
+    public string Layer { get; init; } = "";
     // 飞行形态（空 = 直线弹道 bolt）：决定 X 是否冻结、是否先悬浮蓄势。逻辑与表现都读它。
     public string Trajectory { get; init; } = "";
     // 发射方向（+1/-1），施放时算一次。追踪目标中途死亡后靠它把剩余时间飞完，不改追别人。
@@ -98,7 +107,7 @@ public sealed class CombatEffect
     public double Arc { get; init; }
     // 仅表现：0..1 的通用抖动，同样由 Core 摇定一次；天降形态拿它做出生高度的高低差。
     public double Jitter { get; init; }
-    // 飞行速度（逻辑单位/秒）。只有剑诀会写入配置值；宠物弹、召唤弹与普攻遗留路径一律用默认 1500，
+    // 飞行速度（逻辑单位/秒）。只有剑诀会写入配置值；普攻、宠物弹与召唤弹一律用默认 1500，
     // 所以新增 speed 配置列不会连带改动它们。
     public double Speed { get; init; } = 1500;
     // 穿透：既可以是次级效果（退役配置用），也可以由形态自带（line_pierce 平射贯穿），

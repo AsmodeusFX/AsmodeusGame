@@ -1,0 +1,2 @@
+﻿id,name,kind,layer,hp,atk,attack_range,attack_interval,move_speed,attack_type,gold,visual
+mage,幽火妖,normal,ground,50,8,620,3.2,100,magic,11,mage

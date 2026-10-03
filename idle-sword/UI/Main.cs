@@ -121,6 +121,14 @@ public partial class Main : Control
     {
         try
         {
+            // 截图路径在开头就解析：中途几段自检（分层、飞行单位）也要能各留一张图，
+            // 而那些段落跑在下面那一大段截图流程之前。
+            string? capturePath = null;
+            if (_args.Contains("--capture"))
+            {
+                int at = Array.IndexOf(_args, "--capture");
+                capturePath = at + 1 < _args.Length ? _args[at + 1] : "user://preview.png";
+            }
             if (_battle.LoadError is not null) throw new Exception(_battle.LoadError);
             // 缺音频与缺图同理，是静默损坏，必须显式断言。
             if (_audioLoadError is not null) throw new Exception(_audioLoadError);
@@ -235,7 +243,134 @@ public partial class Main : Control
             if (SfxCount("sfx_hit") + SfxCount("sfx_hit_heavy") != hitsBeforeBurn) throw new Exception("Burn ticks played the hit SFX");
             _battle.Session = _game;
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+            // 普攻：每秒向最近合法目标平射一柄飞剑，间隔走配置。它不带来源剑诀（Skill 为空），
+            // 因此不会被当成第 16 个剑诀混进任何按技能分流的地方。
+            var basicSession = new GameSession(_game.Config, seed: 1);
+            for (int cell = 0; cell < basicSession.Level.Cells; cell++) basicSession.Battle.Spawns[cell] = new() { Passed = true };
+            basicSession.Battle.Enemies.Clear(); basicSession.State.Skills.Clear(); basicSession.Battle.Cooldowns.Clear();
+            var basicTarget = new EnemyState
+            {
+                Id = basicSession.Battle.NextEnemyId++, MonsterId = slime.Id, Kind = slime.Kind,
+                X = basicSession.Battle.PlayerX + 400, Hp = 1e6, MaxHp = 1e6, Atk = 0, AttackTimer = 999, StunUntil = 1e9,
+            };
+            basicSession.Battle.Enemies.Add(basicTarget);
+            for (int i = 0; i < 30; i++) basicSession.Step(step);
+            if (basicTarget.Hp >= 1e6) throw new Exception("Basic attack never landed");
+            if (!basicSession.Battle.Cooldowns.ContainsKey(GameSession.BasicAttackKey)) throw new Exception("Basic attack never consumed its interval");
+            // 真诀：关掉普攻就绝不自动释放，只有显式放一次才看得到（技能预览正是靠 ForceRelease）。
+            // 这一场绑到表现层上逐帧跑，让龙卷与火海真的走一遍绘制路径，而不是只留在 Core 里。
+            var procSession = new GameSession(_game.Config, seed: 1) { BasicAttackEnabled = false };
+            for (int cell = 0; cell < procSession.Level.Cells; cell++) procSession.Battle.Spawns[cell] = new() { Passed = true };
+            procSession.Battle.Enemies.Clear(); procSession.State.Skills.Clear();
+            var procTarget = new EnemyState
+            {
+                Id = procSession.Battle.NextEnemyId++, MonsterId = slime.Id, Kind = slime.Kind,
+                X = procSession.Battle.PlayerX + 400, Hp = 1e6, MaxHp = 1e6, Atk = 0, AttackTimer = 999, StunUntil = 1e9,
+            };
+            procSession.Battle.Enemies.Add(procTarget);
+            procSession.State.Skills["skill_07"] = 1;
+            bool procAutoCast = false;
+            for (int i = 0; i < 60; i++) { procSession.Step(step); if (procSession.Effects.Any(e => e.Skill == "skill_07")) procAutoCast = true; }
+            if (procAutoCast) throw new Exception("A trigger skill auto-cast without a basic attack");
+            if (!procSession.ForceRelease("skill_07")) throw new Exception("Force release failed");
+            if (!procSession.Effects.Any(e => e.Skill == "skill_07")) throw new Exception("Force release produced no effect");
+            procSession.Effects.Clear(); procSession.Battle.Cooldowns.Clear();
+            _battle.Session = procSession;
+            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+            procSession.State.Skills.Clear(); procSession.State.Skills["skill_12"] = 1;
+            procSession.ForceRelease("skill_12");
+            bool tornadoSeen = false;
+            for (int i = 0; i < 30; i++)
+            {
+                procSession.Step(step);
+                if (procSession.Effects.Any(e => e.Skill == "skill_12")) tornadoSeen = true;
+                await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);   // 逐帧跑 _Draw，龙卷的绘制路径真的被执行
+            }
+            if (!tornadoSeen) throw new Exception("剑气流云壁 never produced a tornado");
+            // 寒冷必须同时落到"表现用的状态源"与"实际减速"上：只染蓝不改速度就成了纯视觉欺骗。
+            if (procTarget.ChillUntil <= 0 || procTarget.SlowUntil <= 0) throw new Exception("Chill did not mark the target");
+            procSession.Effects.Clear(); procSession.Battle.Cooldowns.Clear();
+            procSession.State.Skills.Clear(); procSession.State.Skills["skill_02"] = 1;
+            procSession.ForceRelease("skill_02");
+            bool seaSeen = false;
+            for (int i = 0; i < 24; i++)
+            {
+                procSession.Step(step);
+                if (procSession.Effects.Any(e => e.Kind == "ground" && e.Skill == "skill_02")) seaSeen = true;
+                await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+            }
+            if (!seaSeen) throw new Exception("焚天剑诀 left no fire sea");
+            if (procTarget.DotUntil <= 0) throw new Exception("The fire sea did not set the target alight");
+            // 化神档三式终极：同样绑定到表现层逐帧跑，保证黑屏、虚影、贴地剑气这三条新绘制路径真的被执行过一遍。
+            var ultimate = new GameSession(_game.Config, seed: 1) { BasicAttackEnabled = false };
+            for (int cell = 0; cell < ultimate.Level.Cells; cell++) ultimate.Battle.Spawns[cell] = new() { Passed = true };
+            ultimate.Battle.Enemies.Clear(); ultimate.State.Skills.Clear();
+            // 定身靶：摆好就不再移动，位置变化只可能来自剑气击退。
+            EnemyState AddTarget(double x, double hp, string monster = "slime")
+            {
+                var m = _game.Config.Monsters[monster];
+                var e = new EnemyState
+                {
+                    Id = ultimate.Battle.NextEnemyId++, MonsterId = m.Id, Kind = m.Kind,
+                    X = x, Hp = hp, MaxHp = hp, Atk = 0, AttackTimer = 999, StunUntil = 1e9,
+                };
+                ultimate.Battle.Enemies.Add(e); return e;
+            }
+            _battle.Session = ultimate;
+            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+            // ① 空明虚空剑：施放瞬间全场定身（不看射程），贴地剑气推出去把身前的敌人击退。
+            var front = AddTarget(ultimate.Battle.PlayerX + 300, 1e8);
+            var far = AddTarget(ultimate.Battle.PlayerX + 6000, 1e8);
+            ultimate.State.Skills["skill_05"] = 1;
+            ultimate.Battle.Cooldowns.Clear(); ultimate.Effects.Clear();
+            front.StunUntil = 0; far.StunUntil = 0;               // 先解定身，否则"定住了"这条断言是空的
+            double frontX = front.X;
+            if (!ultimate.ForceRelease("skill_05")) throw new Exception("空明虚空剑 was not released");
+            if (ultimate.Battle.Enemies.Any(e => e.StunUntil < 1)) throw new Exception("空明虚空剑 did not root the whole field");
+            foreach (var e in ultimate.Battle.Enemies) e.StunUntil = 1e9;   // 定身看完就重新钉死，只看剑气自己的位移
+            for (int i = 0; i < 60; i++) { ultimate.Step(step); await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame); }
+            if (front.X <= frontX) throw new Exception("空明虚空剑 did not knock the enemy back");
+            if (far.Hp < 1e8) throw new Exception("空明虚空剑 reached an enemy that was never on its path");
+            // ② 斩鬼神：全场血量最高的单位远在射程之外，也必须是它挨这一剑。
+            ultimate.Battle.Enemies.Clear(); ultimate.Effects.Clear(); ultimate.Battle.Cooldowns.Clear();
+            ultimate.State.Skills.Clear(); ultimate.State.Skills["skill_10"] = 1;
+            var weakNear = AddTarget(ultimate.Battle.PlayerX + 300, 1e3);
+            var strongFar = AddTarget(ultimate.Battle.PlayerX + 6000, 1e9);
+            if (!ultimate.ForceRelease("skill_10")) throw new Exception("斩鬼神 was not released");
+            if (weakNear.Hp != 1e3) throw new Exception("斩鬼神 struck something other than the healthiest enemy");
+            for (int i = 0; i < 24; i++) { ultimate.Step(step); await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame); }
+            if (strongFar.Hp >= 1e9) throw new Exception("斩鬼神 never reached the healthiest enemy");
+            if (weakNear.Hp != 1e3) throw new Exception("斩鬼神 hit something it was not aiming at");
+            // ③ 诛仙剑阵：四柄剑依次落下，每一柄都打全体——身后的与极远的都不能漏。
+            ultimate.Battle.Enemies.Clear(); ultimate.Effects.Clear(); ultimate.Battle.Cooldowns.Clear();
+            ultimate.State.Skills.Clear(); ultimate.State.Skills["skill_15"] = 1;
+            var ahead = AddTarget(ultimate.Battle.PlayerX + 300, 1e8);
+            var behind = AddTarget(ultimate.Battle.PlayerX - 400, 1e8);
+            var remote = AddTarget(ultimate.Battle.PlayerX + 6000, 1e8);
+            if (!ultimate.ForceRelease("skill_15")) throw new Exception("诛仙剑阵 was not released");
+            if (ultimate.Effects.Count(e => e.Trajectory == "sky_drop") != 4) throw new Exception("诛仙剑阵 did not raise four swords");
+            for (int i = 0; i < 60; i++) { ultimate.Step(step); await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame); }
+            if (ahead.Hp >= 1e8 || behind.Hp >= 1e8 || remote.Hp >= 1e8)
+                throw new Exception($"诛仙剑阵 did not strike the whole field: {ahead.Hp:0}/{behind.Hp:0}/{remote.Hp:0}");
+            // 分层：地面定位的剑诀打不到飞行单位，不限层的照打。顺带绑着表现层跑几帧，
+            // 让"飞行怪抬高、影子留在地面"这条绘制路径真的被执行过。
+            ultimate.Battle.Enemies.Clear(); ultimate.Effects.Clear(); ultimate.Battle.Cooldowns.Clear();
+            ultimate.State.Skills.Clear(); ultimate.State.Skills["skill_03"] = 1;
+            var onGround = AddTarget(ultimate.Battle.PlayerX + 200, 1e8);
+            var inAir = AddTarget(ultimate.Battle.PlayerX + 260, 1e8, "bat");   // 就在地面靶旁边：没有层判定一定会被波及
+            for (int i = 0; i < 24; i++) { ultimate.Step(step); await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame); }
+            // 留一张图：地面怪踩着地、飞行怪浮空且影子留在地面，是这一眼要核对的东西。
+            await Capture("-flying");
+            if (onGround.Hp >= 1e8) throw new Exception("青莲剑阵 did not strike the ground target");
+            if (inAir.Hp < 1e8) throw new Exception("a ground-only skill struck a flying monster");
+            ultimate.Battle.Enemies.Remove(onGround);
+            ultimate.State.Skills.Clear(); ultimate.State.Skills["skill_01"] = 1; ultimate.Battle.Cooldowns.Clear();
+            for (int i = 0; i < 60; i++) { ultimate.Step(step); await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame); }
+            if (inAir.Hp >= 1e8) throw new Exception("a layer-agnostic skill never reached the flying monster");
+            _battle.Session = _game;
+            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             // 召唤/跟随单位的站位：Core 把召唤物的 X 统一钉在玩家身后，错开完全靠表现层分配位次。
+            // 这里伪造的 CombatEffect 不读配置，因此 summon 已无在役技能也不影响——它覆盖的是表现层的位次分配。
             var fakes = new[] { "skill_05", "skill_10", "skill_15" }
                 .Select(id => new CombatEffect { Kind = "summon", Skill = id, Life = 5, MaxLife = 5 }).ToArray();
             foreach (var fake in fakes) _game.Effects.Add(fake);
@@ -272,7 +407,9 @@ public partial class Main : Control
             // 释放音：预览模式逐个播放剑诀，覆盖全部 5 种 kind。
             // 其中 buff 类不产生 CombatEffect，正是"效果引用差集"会永久漏掉的那一类。
             TogglePreview();
-            foreach (string kind in new[] { "projectile", "target", "ground", "buff", "summon" })
+            // summon 不在列：化神档三个召唤技能已换成三个终极剑诀，当前 15 个在役剑诀里没有 summon，
+            // 因此 sfx_cast_summon 没有活触发点（素材与映射保留，退役配置日后可能复活）。
+            foreach (string kind in new[] { "projectile", "target", "ground", "buff" })
             {
                 int index = PreviewSkillIds.FindIndex(id => _game.Config.Skills[id].Kind == kind);
                 if (index < 0) throw new Exception("No skill of kind " + kind);
@@ -281,12 +418,6 @@ public partial class Main : Control
                 if (SfxCount("sfx_cast_" + kind) == 0) throw new Exception($"Cast SFX for kind '{kind}' never fired");
             }
             TogglePreview();
-            string? capturePath = null;
-            if (_args.Contains("--capture"))
-            {
-                int i = Array.IndexOf(_args, "--capture");
-                capturePath = i + 1 < _args.Length ? _args[i + 1] : "user://preview.png";
-            }
             async Task Capture(string suffix)
             {
                 await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);

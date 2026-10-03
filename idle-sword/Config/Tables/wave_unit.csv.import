@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://blbgdqe7k88ht"
+
+[deps]
+
+files=["res://Config/Tables/wave_unit.wave.translation", "res://Config/Tables/wave_unit.monster.translation", "res://Config/Tables/wave_unit.count.translation", "res://Config/Tables/wave_unit.max.translation"]
+
+source_file="res://Config/Tables/wave_unit.csv"
+dest_files=["res://Config/Tables/wave_unit.wave.translation", "res://Config/Tables/wave_unit.monster.translation", "res://Config/Tables/wave_unit.count.translation", "res://Config/Tables/wave_unit.max.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true

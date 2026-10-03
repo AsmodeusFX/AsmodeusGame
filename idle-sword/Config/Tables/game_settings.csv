@@ -1,4 +1,4 @@
-id,value
+﻿id,value
 starting_gold,120
 cell_width,1920
 respawn_seconds,2
@@ -7,3 +7,5 @@ pet_duplicate_gold,40
 fixed_step,0.05
 save_interval,5
 enemy_visual_limit,80
+wave_growth,0.01
+wave_accel,0.00018

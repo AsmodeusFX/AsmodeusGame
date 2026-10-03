@@ -287,6 +287,8 @@ public partial class BattleView : Control
             DrawRect(new(x + 5, 297, 35, 27), spawn.Passed ? new Color("#456963") : new Color("#9d7856"));
             DrawString(font, new(x - 20, 394), spawn.Passed ? "已越过" : $"刷怪点 {cell + 1}", HorizontalAlignment.Left, -1, 18, UiKit.Muted);
         }
+        // 诛仙剑阵的"天光尽墨"要盖住角色、敌人与已有的地面效果，所以铺在这里；神剑本身稍后才画，因此是亮的。
+        DrawEclipse();
         // 地面持续效果（剑阵/领域）画在角色与敌人之下，避免盖住血条。
         foreach (var effect in Session.Effects.Where(e => e.Kind == "ground" && !e.Hostile)) DrawEffect(effect, font);
         float bob = Session.Moving ? (float)Math.Sin(Session.Elapsed * 14) * 3 : 0;
@@ -294,6 +296,7 @@ public partial class BattleView : Control
         if (Session.Battle.RespawnTimer <= 0) Sprite("player", 330, 368 + bob, 136);
         else DrawString(font, new(220, 290), "调息重生…", HorizontalAlignment.Left, -1, 26, UiKit.Gold);
         DrawPlayerAuras();
+        DrawPhantom();
         int pi = 0;
         foreach (var pet in Session.State.EquippedPets)
         {
@@ -305,12 +308,18 @@ public partial class BattleView : Control
         foreach (var enemy in visible)
         {
             float x = X(enemy.X), size = enemy.Kind switch { "boss" => 194, "rift" => 174, "elite" => 125, _ => 96 };
-            float y = 368 - (enemy.Kind == "rift" ? (float)Math.Sin(Session.Elapsed * 2) * 7 : 0);
-            DrawEllipseShadow(x, 368, size * .48f);
+            // 飞行单位浮空：影子仍压在地面线上，所以"飞着"一眼可辨。血条、名字与状态图标都是按 y 算的，自动跟着走。
+            float y = 368;
+            if (Session.Config.Monsters[enemy.MonsterId].Layer == "air") y -= 92 + (float)Math.Sin(Session.Elapsed * 2 + enemy.Id) * 7;
+            else if (enemy.Kind == "rift") y -= (float)Math.Sin(Session.Elapsed * 2) * 7;
+            DrawEllipseShadow(x, 368, size * (Session.Config.Monsters[enemy.MonsterId].Layer == "air" ? .30f : .48f));
             // 受击瞬间放大 12% 并叠加高光，代替无法在 LDR 下实现的白色闪光。
             bool hit = _flash.TryGetValue(enemy.Id, out double until) && until > _clock;
             if (hit) size *= 1.12f;
-            Sprite(Session.Config.Monsters[enemy.MonsterId].Visual, x, y, size, enemy.Kind == "rift" && !Session.RiftUnlocked ? new Color(.6f, .6f, .7f) : Colors.White);
+            // 寒冷先于裂隙封印判定：被寒气侵住的敌人整只染成冰蓝，一眼可辨（减速冰环仍照常由 SlowUntil 画出）。
+            var tint = enemy.ChillUntil > 0 ? new Color(.55f, .74f, 1f)
+                : enemy.Kind == "rift" && !Session.RiftUnlocked ? new Color(.6f, .6f, .7f) : Colors.White;
+            Sprite(Session.Config.Monsters[enemy.MonsterId].Visual, x, y, size, tint);
             if (hit) DrawCircle(new(x, y - size * .5f), size * .34f, new Color(1, 1, 1, .16f));
             DrawEnemyStatus(enemy, x, y, size);
             DrawRect(new(x - 42, y - size - 6, 84, 5), UiKit.Ink);
@@ -353,7 +362,13 @@ public partial class BattleView : Control
             case "sky_drop": DrawSkyDropBlade(effect, x); return;
             case "arc_homing": DrawArcBlade(effect, x); return;
             case "line_shot": DrawPierceBlade(effect, x, false); return;
-            case "line_pierce": DrawPierceBlade(effect, x, true); return;
+            case "line_pierce":
+                // 同样是 line_pierce，三招的读法完全不同：空明虚空剑是贴地的弧形剑气、剑气流云壁是推出去的龙卷，
+                // 其余仍走原来的平射贯穿剑。形态只决定"怎么飞、怎么命中"，观感由技能 ID 分流。
+                if (effect.Skill == "skill_05") DrawGroundWave(effect, x);
+                else if (effect.Skill == "skill_12") DrawTornado(effect, x);
+                else DrawPierceBlade(effect, x, true);
+                return;
         }
         switch (effect.Skill)
         {
@@ -420,17 +435,110 @@ public partial class BattleView : Control
     {
         var shape = ShapeOf(effect);
         float radius = (float)(effect.AoeRadius > 0 ? effect.AoeRadius : 60);
+        // 焚天剑诀与诛仙剑阵复用同一套下落编排，只换配色与剑的尺寸：
+        // 前者是一柄火焰剑落地成火海（后续由 DrawGround 的 skill_02 分支接手），后者是四柄结成剑阵的诛仙剑。
+        bool flame = effect.Skill == "skill_02", divine = effect.Skill == "skill_15";
+        Color hue = flame ? Flame : divine ? Void : Thunder;
         // 出生高度带随机高低差；随机值由 Core 摇定一次，逐帧重摇会抖动。
         float top = SkyDropTop(effect.Index) + (float)(effect.Jitter * shape.SpawnJitter);
         // 停留与下落共用 Timer：Timer 大于 duration 时还没开始落，clamp 到 0 即为"悬停中"。
         float fall = (float)Math.Clamp(1 - effect.Timer / Math.Max(.05, shape.Duration), 0, 1);
         float y = Math.Clamp(top + (356 - top) * fall * fall, 6f, 394f);   // 平方：越接近地面越快
-        DrawEllipseFloor(x, radius, new Color(Thunder, .08f + .14f * fall));
-        DrawRect(new(x - 1, y, 2, Math.Max(0, 356 - y)), new Color(Thunder, .12f));
-        if (fall > .85f) DrawEllipseFloor(x, radius * .7f, new Color("#fffce8", .18f));
+        DrawEllipseFloor(x, radius, new Color(hue, .08f + .14f * fall));
+        DrawRect(new(x - 1, y, 2, Math.Max(0, 356 - y)), new Color(hue, .12f));
+        if (fall > .85f) DrawEllipseFloor(x, radius * .7f, new Color(flame ? "#ffe0a8" : "#fffce8", .18f));
         // 悬停期轻微上下浮动，读起来是"浮现在空中停了一下"而不是卡住。
         float bob = effect.Timer > 0 ? (float)Math.Sin(_clock * 4 + effect.Index * 1.7) * 4 : 0;
-        DrawBlade(x, y + bob, Math.PI / 2, 72, Thunder, UiKit.Gold);
+        DrawBlade(x, y + bob, Math.PI / 2, divine ? 116 : 72, hue, UiKit.Gold);
+    }
+
+    /// <summary>
+    /// 空明虚空剑：一道**紧贴地面**的弧形刀光整体向前平移（不是肩侧平射，也不拉贯穿全屏的剑光）。
+    /// 形状取新月：后缘自左下贴地起、扬起一条长曲线到尖端，前缘贴着尖端收回来，
+    /// 中间填半透明的虚空剑气、前缘描亮，底下再拖一层尘土——读作"一道立起来的刀光在平推"，
+    /// 而不是一个对称的鼓包。
+    /// </summary>
+    private void DrawGroundWave(CombatEffect effect, float x)
+    {
+        const float Rise = 190;   // 尖端离地高度
+        // 新月由两条共享端点的二次贝塞尔围成：一端贴地、一端是尖端，两条边朝相反方向鼓，
+        // 同参数处的间距就是新月在那里的厚度。leading = 前缘（描亮的那条）。
+        Vector2[] Edge(float cx, float scale, bool leading)
+        {
+            // 整道刀光贴着 effect.X 摆：Core 用 X 判定命中，表现层不得再自己前移，
+            // 否则会出现"看着没碰到却掉血"。只把体型收在 X 前后各一小段，读作"从角色身前推出去"。
+            var a = new Vector2(cx - 44 * scale, 356);
+            var b = new Vector2(cx + 56 * scale, 356 - Rise * scale);
+            var c = leading ? new Vector2(cx + 30 * scale, 356 - Rise * .30f * scale)
+                            : new Vector2(cx - 86 * scale, 356 - Rise * .58f * scale);
+            var points = new Vector2[17];
+            for (int i = 0; i < points.Length; i++)
+            {
+                float t = i / (float)(points.Length - 1), u = 1 - t;
+                points[i] = new(u * u * a.X + 2 * u * t * c.X + t * t * b.X, u * u * a.Y + 2 * u * t * c.Y + t * t * b.Y);
+            }
+            return points;
+        }
+        void Sail(float cx, float scale, float alpha)
+        {
+            var back = Edge(cx, scale, false);
+            var front = Edge(cx, scale, true);
+            var shape = new Vector2[back.Length + front.Length];
+            back.CopyTo(shape, 0);
+            for (int i = 0; i < front.Length; i++) shape[back.Length + i] = front[front.Length - 1 - i];
+            DrawColoredPolygon(shape, new Color(Void, .30f * alpha));
+            DrawPolyline(front, new Color(Void, .75f * alpha), Math.Max(2f, 8 * scale));      // 外发光
+            DrawPolyline(front, new Color("#f4efff", .95f * alpha), Math.Max(1f, 3 * scale)); // 亮芯
+        }
+        if (effect.Timer > 0)   // 出生：在角色身前由小涨大，走完前摇才整道推出去
+        {
+            float charge = (float)Math.Clamp(1 - effect.Timer / Math.Max(.01, ShapeOf(effect).Hold), 0f, 1f);
+            // 出生点摆在角色身前（角色精灵到 398 为止），比发射点靠前半个身位；
+            // 长到满尺寸时它自己的横向跨度已覆盖 x，所以起飞那一刻不会"跳"回去。
+            float px = x + 46;
+            Sail(px, .15f + .70f * charge, .25f + .6f * charge);
+            DrawCircle(new(px - 26, 348), 4 + charge * 10, new Color(Void, .2f + .5f * charge));
+            return;
+        }
+        for (int i = 3; i >= 1; i--) Sail(x - i * 52, .82f, .10f * (4 - i));   // 拖尾：整道刀光的残影
+        Sail(x, 1f, 1f);
+        DrawEllipseFloor(x - 24, 104, new Color("#e6e0d6", .16f));             // 贴地拖起的一层尘
+    }
+
+    /// <summary>
+    /// 剑气流云壁：一道自角色身前向前推出的寒冰龙卷。位置就是 Core 算好的 effect.X
+    /// （推进距离参与判定，表现层不得再自己偏移），旋转的螺旋筒壁 + 地面拖痕 + 卷起的冰点，
+    /// 读作"卷着往前走"而不是"射出去"。寿命越短越淡，散场时不会突然消失。
+    /// </summary>
+    private void DrawTornado(CombatEffect effect, float x)
+    {
+        const float Bottom = 358;
+        float fade = (float)Math.Clamp(effect.Life / Math.Max(.01, effect.MaxLife), 0, 1);
+        float top = Bottom - 210 * (.55f + .45f * fade);
+        DrawEllipseFloor(x, 46, new Color(Frost, .18f * fade));
+        DrawLine(new(x - 70, Bottom), new(x + 70, Bottom), new Color(Frost, .22f * fade), 5);
+        for (int i = 0; i < 7; i++)
+        {
+            float t = i / 6f;
+            float y = Bottom - t * (Bottom - top);
+            float width = 14 + 46 * (1 - t);          // 下粗上细：龙卷的风眼在上方
+            float spin = (float)(_clock * 11 - i * .9);
+            var wall = new Vector2[9];
+            for (int j = 0; j < wall.Length; j++)
+            {
+                float phase = j / (float)(wall.Length - 1);
+                wall[j] = new(x + (float)Math.Sin(spin + phase * Mathf.Tau * 1.5) * width * .5f, y - phase * 26);
+            }
+            DrawPolyline(wall, new Color(Frost, (.10f + .05f * (1 - t)) * fade), 4);
+            DrawPolyline(wall, new Color("#e8f7ff", .16f * fade), 2);
+        }
+        for (int i = 0; i < 10; i++)
+        {
+            float t = (float)((_clock * .8 + i / 10.0) % 1.0);
+            float y = Bottom - t * (Bottom - top);
+            float px = x + (float)Math.Sin(_clock * 9 + i * 2.3) * (10 + 34 * (1 - t));
+            DrawRect(new(px - 2, y, 4, 4), new Color("#e8f7ff", .8f * fade));
+        }
     }
 
     /// <summary>
@@ -507,6 +615,23 @@ public partial class BattleView : Control
                     DrawRect(new(sx, sy, 3, 3), new Color(Frost, .85f));
                 }
                 break;
+            case "skill_02": // 焚天剑诀：火焰剑落地 → 一片小火海（范围与万剑决同级，因此火苗比焚天剑阵稀）
+                DrawEllipseFloor(x, radius, new Color(Flame, .22f));
+                for (int i = 0; i < 10; i++)
+                {
+                    float fx = x - radius + i * (radius * 2 / 9);
+                    float h = 14 + (float)Math.Sin(_clock * 9 + i * 1.7) * 8;
+                    DrawColoredPolygon([new(fx - 6, 358), new(fx, 358 - h), new(fx + 6, 358)], new Color(i % 3 == 0 ? new Color("#ffd98a") : Flame, .8f));
+                }
+                // 开头约 0.4 秒叠画一柄坠下的火焰剑：火海是这把剑落地才成的，不是凭空冒出来的。
+                if (progress < .14f)
+                {
+                    float fall = progress / .14f;
+                    float y = Math.Clamp(10 + (356 - 10) * fall * fall, 6f, 394f);
+                    DrawRect(new(x - 1, y, 2, Math.Max(0, 356 - y)), new Color(Flame, .14f));
+                    DrawBlade(x, y, Math.PI / 2, 72, Flame, UiKit.Gold);
+                }
+                break;
             case "skill_13": // 焚天剑阵：火海与跳动火苗
                 DrawEllipseFloor(x, radius, new Color(Flame, .22f));
                 for (int i = 0; i < 16; i++)
@@ -531,20 +656,52 @@ public partial class BattleView : Control
         if (effect.Hostile) { DrawArc(new(330, 340), 38, 0, Mathf.Tau, 24, Hostile, 3); DrawLine(new(330, 170), new(330, 306), Hostile, 2); return; }
         switch (effect.Skill)
         {
-            case "skill_02": // 落星诀：天降星芒与落点冲击环
-                DrawRect(new(x - 16, 120, 32, 226), new Color(UiKit.Gold, .16f));
-                DrawRect(new(x - 5, 120, 10, 226), new Color(UiKit.Gold, .55f));
-                DrawArc(new(x, 350), 26 + progress * 48, 0, Mathf.Tau, 26, new Color(UiKit.Gold, .8f), 3);
+            case "skill_07": // 御雷真诀：天雷贯顶——主落雷之外再叠两道细弧，读起来比单体小技能重得多
+                DrawLightning(x, 96, 348, Thunder);
+                DrawLightning(x - 34, 150, 340, new Color(Thunder, .5f));
+                DrawLightning(x + 34, 150, 340, new Color(Thunder, .5f));
+                DrawArc(new(x, 350), 30 + progress * 52, 0, Mathf.Tau, 30, new Color(Thunder, .85f), 4);
                 break;
-            case "skill_07": // 天雷引：锯齿闪电与爆裂环
-                DrawLightning(x, 150, 348, Thunder);
-                DrawArc(new(x, 350), 30 + progress * 42, 0, Mathf.Tau, 26, new Color(Thunder, .85f), 3);
+            case "skill_10": // 斩鬼神：巨剑自目标斜上方浮现，先举起再横挥而下——是"挥"，不是自上而下的戳
+            {
+                float wind = Math.Clamp(progress / .45f, 0f, 1f);          // 浮现并举剑
+                float swing = Math.Clamp((progress - .45f) / .3f, 0f, 1f);  // 挥下
+                // 剑柄固定在目标的斜上方（"身后"侧），剑身绕它转：-1.4 弧度是举起（剑尖朝上），
+                // +2.2 是斩到**目标方向**的下前方——挥动方向必须朝着敌人，朝外挥就成了"抡空"。
+                float hx = x + 132 - 24 * wind, hy = 108 + 26 * wind;
+                double angle = -1.4 + 3.6 * swing;
+                DrawRect(new(hx - 2, hy, 4, Math.Max(0, 350 - hy)), new Color(Void, .08f));
+                DrawBlade(hx + (float)Math.Cos(angle) * 62, hy + (float)Math.Sin(angle) * 62, angle, 124,
+                    new Color(Void, .55f + .45f * wind), UiKit.Gold);
+                // 剑身刀光：从剑柄到剑尖一条亮线，挥到哪亮到哪。
+                DrawLine(new(hx, hy), new(hx + (float)Math.Cos(angle) * 124, hy + (float)Math.Sin(angle) * 124),
+                    new Color("#f4efff", .8f), 4);
+                float swept = (float)Math.Sin(Math.PI * swing);   // 中段最强，两端收住
+                if (swept > 0)
+                {
+                    // 挥砍残影：把剑尖刚扫过的那段画成一条弧，动作才读得出来。
+                    var trail = new Vector2[11];
+                    for (int i = 0; i < trail.Length; i++)
+                    {
+                        double at = -1.4 + 3.6 * swing * i / (trail.Length - 1);
+                        trail[i] = new(hx + (float)Math.Cos(at) * 124, hy + (float)Math.Sin(at) * 124);
+                    }
+                    DrawPolyline(trail, new Color(Void, .5f * swept), 12);
+                    DrawPolyline(trail, new Color("#f4efff", .45f * swept), 4);
+                }
+                if (swing >= 1)
+                {
+                    // 斩到底：那道斜杠是**击中效果**，要落在敌人身上，不是挂在天上——
+                    // 以敌人（x, 约 288）为中心的一道短斜线，配一圈冲击环。
+                    float left = 1 - Math.Clamp((progress - .78f) / .22f, 0f, 1f);
+                    var (sx, sy) = (x - 104, 218);
+                    var (ex, ey) = (x + 96, 358);
+                    DrawLine(new(sx, sy), new(ex, ey), new Color(Void, .5f * left), 16);
+                    DrawLine(new(sx, sy), new(ex, ey), new Color("#f4efff", .85f * left), 5);
+                    DrawArc(new(x, 340), 40 + (1 - left) * 60, 0, Mathf.Tau, 30, new Color(Void, .8f * left), 4);
+                }
                 break;
-            case "skill_12": // 破云诀：下坠破甲符印
-                DrawColoredPolygon([new(x, 148), new(x + 22, 202), new(x, 256), new(x - 22, 202)], new Color(Void, .8f));
-                DrawColoredPolygon([new(x, 172), new(x + 11, 202), new(x, 232), new(x - 11, 202)], new Color("#efe6ff", .9f));
-                DrawArc(new(x, 256), 34, 0, Mathf.Tau, 24, new Color(Void, .85f), 3);
-                break;
+            }
             default:
                 DrawArc(new(x, 340), 38, 0, Mathf.Tau, 24, UiKit.Jade, 3); DrawLine(new(x, 170), new(x, 306), UiKit.Jade, 2); break;
         }
@@ -563,6 +720,8 @@ public partial class BattleView : Control
             if (x < -160 || x > 2080) continue;
             // 各槽错开相位，否则多个单位同步浮动，看着像同一张图。
             y += (float)Math.Sin(_clock * 3 + slot * 1.3) * 7;
+            // 这张表对着的是退休配置里的三个召唤剑诀（沿用同一批 id）。当前 15 个在役剑诀没有 summon，
+            // 所以这段平时不会被走到——保留是为了「退役配置日后复活」时不必再补一次映射。
             string sprite = effect.Skill switch { "skill_05" => "summon_shadow", "skill_10" => "summon_taixu", "skill_15" => "summon_zhuxie", _ => "pet_snow" };
             var tint = effect.Skill switch { "skill_05" => Wind, "skill_10" => Void, "skill_15" => UiKit.Gold, _ => UiKit.Jade };
             DrawEllipseFloor(x, 56, new Color(tint, .16f));
@@ -601,6 +760,65 @@ public partial class BattleView : Control
             DrawLine(new(x + 8, y - size * .52f), new(x - 10, y - size * .2f), Hostile, 2);
         }
     }
+    /// <summary>
+    /// 诛仙剑阵的"天光尽墨"：整片战斗区压暗。取所有诛仙剑效果里「开头快速升起、结尾渐隐」的最大值，
+    /// 于是四柄剑错时落下的整段时间里天色都是暗的，而不是每柄剑各暗一次、中间回亮。
+    /// </summary>
+    private void DrawEclipse()
+    {
+        double veil = 0;
+        foreach (var effect in Session.Effects.Where(e => e.Skill == "skill_15" && e.MaxLife > 0))
+        {
+            double rise = Math.Clamp((1 - effect.Life / effect.MaxLife) / .25, 0, 1);
+            double fall = Math.Clamp(effect.Life / .3, 0, 1);
+            veil = Math.Max(veil, Math.Min(rise, fall));
+        }
+        if (veil > 0) DrawRect(new(0, 0, 1920, 440), new Color("#04060b", (float)(.84 * veil)));
+    }
+
+    /// <summary>
+    /// 斩鬼神的虚影：半身持剑的能量体浮在主角身上，先渐显、剑光落下时散去。
+    /// 纯表现——它不改任何数值，也不产生 CombatEffect；只要场上还有斩鬼神的效果就跟着画。
+    /// </summary>
+    private void DrawPhantom()
+    {
+        var strike = Session.Effects.FirstOrDefault(e => e.Skill == "skill_10" && e.MaxLife > 0);
+        if (strike is null) return;
+        double p = Math.Clamp(1 - strike.Life / strike.MaxLife, 0, 1);
+        // 前 70% 渐显并稳住、后 30% 散去；两段之间取小，所以不会中途闪一下。
+        float a = (float)(p < .7 ? Math.Clamp(p / .16, 0, 1) : Math.Clamp((1 - p) / .3, 0, 1));
+        if (a <= 0) return;
+        // 底边抬到 286：人物头顶在 232 上下，所以虚影浮在人**上方**、只压住一点点。
+        const float Cx = 330, Base = 286;
+        float swing = (float)Math.Clamp((p - .45) / .45, 0, 1);   // 0 = 举剑蓄势，1 = 斩到底
+        // 身形比初版矮一档（168 → 143）：原来是"整个人浮在头顶上方"，现在只比人物高出一头多一点。
+        Vector2[] left = [new(Cx, Base - 143), new(Cx - 36, Base - 107), new(Cx - 44, Base)];
+        Vector2[] right = [new(Cx, Base - 143), new(Cx + 36, Base - 107), new(Cx + 44, Base)];
+        DrawColoredPolygon([left[0], left[1], left[2], right[2], right[1]], new Color(Void, .18f * a));
+        // 只描"头 + 双肩"这条轮廓：能量体是浮着的，不该有一条实线的腰。
+        DrawPolyline(left, new Color(Void, .85f * a), 4);
+        DrawPolyline(right, new Color(Void, .85f * a), 4);
+        DrawLine(new(Cx - 44, Base - 12), new(Cx + 44, Base - 12), new Color(Void, .40f * a), 3);
+        DrawCircle(new(Cx, Base - 158), 16, new Color(Void, .40f * a));
+        // 持剑的手落在右肩外：整把剑绕它从头顶举起到斩向前下方，与目标的巨剑同步。
+        const float Hx = Cx + 38, Hy = Base - 100;
+        double angle = -1.5 + 2.35 * swing;
+        float bx = Hx + (float)Math.Cos(angle) * 56, by = Hy + (float)Math.Sin(angle) * 56;
+        DrawBlade(bx, by, angle, 112, new Color(Void, .9f * a), new Color(UiKit.Gold, a));
+        // 剑身刀光：从剑柄到剑尖一条亮线，挥到哪亮到哪。
+        DrawLine(new(Hx, Hy), new(Hx + (float)Math.Cos(angle) * 112, Hy + (float)Math.Sin(angle) * 112), new Color("#f4efff", .75f * a), 3);
+        if (swing is > 0 and < 1)   // 挥砍残影：把刚扫过的那段画成一条弧，动作才读得出来
+        {
+            var trail = new Vector2[9];
+            for (int i = 0; i < trail.Length; i++)
+            {
+                double at = -1.5 + 2.35 * swing * i / (trail.Length - 1);
+                trail[i] = new(Hx + (float)Math.Cos(at) * 112, Hy + (float)Math.Sin(at) * 112);
+            }
+            DrawPolyline(trail, new Color(Void, .35f * a * (float)Math.Sin(Math.PI * swing)), 4);
+        }
+    }
+
     /// <summary>玩家增益光环：护盾金罡、归元回气、万剑吸血、疾风攻速、醉仙暴击，以及通用增益环。</summary>
     private void DrawPlayerAuras()
     {

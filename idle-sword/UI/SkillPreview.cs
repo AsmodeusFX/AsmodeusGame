@@ -29,7 +29,8 @@ public partial class Main
         if (_preview is null)
         {
             // 固定种子：同一剑诀每次预览的表现一致，便于对照。
-            _preview = new GameSession(_game.Config, seed: 1);
+            // 关掉普攻：预览是逐个剑诀的对照台，每秒一发的飞剑只会往画面里混入不属于所选剑诀的东西。
+            _preview = new GameSession(_game.Config, seed: 1) { BasicAttackEnabled = false };
             SelectPreviewSkill(0);
         }
         else _preview = null;
@@ -78,7 +79,14 @@ public partial class Main
     {
         if (_preview is null) return;
         _previewClock += dt;
-        if (_previewClock >= PreviewRecast) { _previewClock = 0; _preview.Battle.Cooldowns.Clear(); }
+        if (_previewClock >= PreviewRecast)
+        {
+            _previewClock = 0;
+            _preview.Battle.Cooldowns.Clear();
+            // 真诀不在冷却到点自动释放（要等普攻按概率摇中），而预览里普攻是关掉的。
+            // 不显式放一次，它们在对照模式下永远不出手，等于看不到。
+            if (_preview.Config.Skills[PreviewSkillId].TriggerChance > 0) _preview.ForceRelease(PreviewSkillId);
+        }
         var target = _preview.Battle.Enemies.FirstOrDefault(e => e.Hp > 0);
         if (target is null) { PreparePreviewField(); return; }
         // 每步重新钉住靶子：位置、免伤、不反击，保证 15 个剑诀面对完全相同的对照条件。
@@ -107,6 +115,7 @@ public partial class Main
             "pierce" => "穿透",
             "multi" => $"多重 ×{skill.SecondaryValue:0}",
             "slow" => $"减速 {skill.SecondaryValue:P0} / {skill.SecondaryDuration:0.#}s",
+            "chill" => $"寒冷 减速 {skill.SecondaryValue:P0} / {skill.SecondaryDuration:0.#}s",
             "stun" => $"眩晕 {skill.SecondaryDuration:0.#}s",
             "dot" => $"灼烧 {skill.SecondaryValue:P0}/秒 / {skill.SecondaryDuration:0.#}s",
             "vulnerable" => $"易伤 +{skill.SecondaryValue:P0} / {skill.SecondaryDuration:0.#}s",
@@ -135,6 +144,8 @@ public partial class Main
         };
         string realm = _game.Config.Row("SwordLevel", skill.Realm).Text("name");
         string tail = shape == "" ? secondary : skill.Secondary == "" ? shape : $"{secondary} · {shape}";
-        return $"{realm} · {skill.Kind} · 冷却 {skill.Cooldown:0.#}s · 射程 {skill.Range:0} · 威力 ×{skill.Power:0.##} · {tail}";
+        // 真诀的出手时机由普攻概率决定，配置里的 cooldown 只是最短触发间隔；不点明的话"冷却 5s"会被读错。
+        string trigger = skill.TriggerChance > 0 ? $"普攻触发 {skill.TriggerChance:P0} · 最短间隔 {skill.Cooldown:0.#}s" : $"冷却 {skill.Cooldown:0.#}s";
+        return $"{realm} · {skill.Kind} · {trigger} · 射程 {skill.Range:0} · 威力 ×{skill.Power:0.##} · {tail}";
     }
 }
